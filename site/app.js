@@ -197,12 +197,8 @@
   /* ---------- station layer (canvas) ---------- */
   const canvas = L.canvas({ pane: 'stations', padding: 0.5 });
   const stationLayer = L.layerGroup();
-  const tip = L.tooltip({ direction: 'top', offset: [0, -6] });
-  const stationLabel = (s) => s.n + (s.s ? ', ' + s.s : '') + ' — ' + s.p + '%';
   const stationMarkers = stations.map((s) => {
     const m = L.circleMarker([s.la, s.lo], { renderer: canvas, radius: 4.5, weight: 1, opacity: 0.9, fillOpacity: 1, bubblingMouseEvents: false });
-    m.on('mouseover', (e) => { tip.setContent(el('span', null, stationLabel(s))); tip.setLatLng(e.latlng); map.openTooltip(tip); });
-    m.on('mouseout', () => map.closeTooltip(tip));
     m.on('click', () => selectStation(s, false));
     stationLayer.addLayer(m);
     return m;
@@ -344,6 +340,44 @@
   const rerenderLast = () => { if (last) { last.type === 'point' ? selectPoint(last.ll) : selectStation(last.s, false); } };
   map.on('click', (e) => selectPoint(e.latlng));
 
+  /* ---------- hover card: follows the pointer with the estimated chance and the nearest station ----------
+   * A plain element (not a Leaflet tooltip) so it tracks the mouse smoothly and also over station dots.
+   * Listens on the container's DOM events; positions are throttled to one update per frame. */
+  const hover = el('div', 'hover-tip'); hover.hidden = true; hover.setAttribute('aria-hidden', 'true');
+  const hvTop = el('div', 'ht-top'), hvSw = el('span', 'sw'), hvPct = el('span', 'ht-pct'), hvKind = el('span', 'ht-kind');
+  const hvStn = el('div', 'ht-stn');
+  hvTop.append(hvSw, hvPct, hvKind); hover.append(hvTop, hvStn);
+  map.getContainer().appendChild(hover);
+  let hoverOn = true, hoverBusy = false, hoverEv = null, panning = false;
+  const hideHover = () => { hover.hidden = true; };
+  function drawHover() {
+    hoverBusy = false;
+    const e = hoverEv;
+    if (!hoverOn || panning || !e) return hideHover();
+    if (e.target.closest && e.target.closest('.leaflet-control, .map-toggle')) return hideHover();
+    const box = map.getContainer().getBoundingClientRect(), cx = e.clientX - box.left, cy = e.clientY - box.top;
+    const ll = map.containerPointToLatLng([cx, cy]);
+    const v = valueAt(ll), n = nearestStation(ll.lat, ll.lng);
+    if (v === null || !n) return hideHover();                       // outside the land the surface covers
+    const p = v === undefined ? n.s.p : v;                           // value grid not loaded yet: station value
+    hvSw.style.background = colorOf(p);
+    hvPct.textContent = p + '%';
+    hvKind.textContent = (v === undefined ? 'station value' : 'chance of a white Christmas') + (meta.synthetic ? ' · demo data' : '');
+    hvStn.replaceChildren(el('span', 'ht-lbl', 'Nearest station'), el('b', null, stationName(n.s)),
+      el('span', 'ht-sub', n.mi < 1 ? 'less than 1 mi away · station value ' + n.s.p + '%' : n.mi.toFixed(0) + ' mi away · station value ' + n.s.p + '%'));
+    hover.hidden = false;
+    const w = hover.offsetWidth, h = hover.offsetHeight, gap = 16;
+    let x = cx + gap, y = cy + gap;
+    if (x + w > box.width - 6) x = cx - gap - w;                    // flip to the other side near the edges
+    if (y + h > box.height - 6) y = cy - gap - h;
+    hover.style.transform = 'translate(' + Math.max(6, x).toFixed(0) + 'px,' + Math.max(6, y).toFixed(0) + 'px)';
+  }
+  const mapEl = map.getContainer();
+  mapEl.addEventListener('mousemove', (e) => { hoverEv = e; if (!hoverBusy) { hoverBusy = true; requestAnimationFrame(drawHover); } });
+  mapEl.addEventListener('mouseleave', () => { hoverEv = null; hideHover(); });
+  map.on('movestart zoomstart', () => { panning = true; hideHover(); });
+  map.on('moveend zoomend', () => { panning = false; });
+
   /* ---------- theme (page chrome, water / context colours and overlays; the class colours are NOAA's in both themes) ---------- */
   function paint() {
     root.dataset.theme = theme;
@@ -392,6 +426,7 @@
   stationsBox.addEventListener('change', (e) => setStations(e.target.checked));
 
   /* ---------- toolbar ---------- */
+  $('#t-hover').addEventListener('change', (e) => { hoverOn = e.target.checked; if (!hoverOn) hideHover(); });
   $('#t-wide').addEventListener('change', (e) => {
     layoutEl.classList.toggle('wide', e.target.checked);
     try { localStorage.setItem('wc-wide', e.target.checked ? '1' : '0'); } catch (x) { /* ignore */ }
