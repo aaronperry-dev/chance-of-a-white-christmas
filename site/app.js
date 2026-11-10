@@ -14,7 +14,11 @@
     if (text !== undefined) n.textContent = text;       // never innerHTML for data
     return n;
   };
-  const getJSON = (u) => fetch(u).then((r) => { if (!r.ok) throw new Error(u + ' -> ' + r.status); return r.json(); });
+  const getJSON = (u, opts) => fetch(u, opts).then((r) => { if (!r.ok) throw new Error(u + ' -> ' + r.status); return r.json(); });
+  /* Every data file is requested with the build stamp from meta.json (itself always re-validated), so a
+   * browser or CDN can never mix files from two different builds (e.g. new meta with an old border file). */
+  let V = '';
+  const data = (f) => 'data/' + f + (V ? '?v=' + V : '');
   const optional = (u) => getJSON(u).catch(() => null);
   const pct = (x, d = 0) => (100 * x).toFixed(d) + '%';
   const css = (v) => getComputedStyle(root).getPropertyValue(v).trim();
@@ -30,14 +34,16 @@
   /* ---------- load ---------- */
   let meta, stations;
   try {
-    [meta, stations] = await Promise.all([getJSON('data/meta.json'), getJSON('data/stations.json')]);
+    meta = await getJSON('data/meta.json', { cache: 'no-cache' });
+    V = encodeURIComponent(meta.built_utc || '');
+    stations = await getJSON(data('stations.json'));
   } catch (err) {
     const box = $('#map-error');
     box.hidden = false;
     box.textContent = 'Map data not found. Run "python -m pipeline.build" (or let the GitHub Action run) to generate site/data/. ' + err.message;
     return;
   }
-  const [statesGJ, ctxGJ, places] = await Promise.all([optional('data/states.geojson'), optional('data/context.geojson'), optional('data/places.json')]);
+  const [statesGJ, ctxGJ, places] = await Promise.all([optional(data('states.geojson')), optional(data('context.geojson')), optional(data('places.json'))]);
   const SURF = meta.surface;
 
   /* value grid: one byte per 1 km cell (255 = outside land), gzip. Loaded in the background; clicks
@@ -45,7 +51,7 @@
   let valueGrid = null;
   (async () => {
     try {
-      const buf = new Uint8Array(await (await fetch('data/' + SURF.values)).arrayBuffer());
+      const buf = new Uint8Array(await (await fetch(data(SURF.values))).arrayBuffer());
       let raw = buf;
       if (buf[0] === 0x1f && buf[1] === 0x8b) {                          // still gzipped (the server did not decode it)
         const ds = new Blob([buf]).stream().pipeThrough(new DecompressionStream('gzip'));
@@ -150,13 +156,13 @@
       L.DomUtil.setTransform(this._img, this._corner(this._g.x0, this._g.y1, e.zoom, o), this._map.getZoomScale(e.zoom));
     },
   });
-  const surfaceLayer = new GridImage('data/' + SURF.overlay, 'surface').addTo(map);
+  const surfaceLayer = new GridImage(data(SURF.overlay), 'surface').addTo(map);
   /* terrain shading: the 1 km US layer, plus (when there is a base map) a coarser one for the rest of the view */
   const reliefLayers = [];
-  if (SURF.relief) reliefLayers.push(new GridImage('data/' + SURF.relief, 'relief'));
+  if (SURF.relief) reliefLayers.push(new GridImage(data(SURF.relief), 'relief'));
   const BASE = meta.base;
-  const baseLayer = BASE ? new GridImage('data/' + BASE[theme], 'base', BASE.grid).addTo(map) : null;
-  if (BASE && BASE.relief) reliefLayers.push(new GridImage('data/' + BASE.relief, 'relief', BASE.grid));
+  const baseLayer = BASE ? new GridImage(data(BASE[theme]), 'base', BASE.grid).addTo(map) : null;
+  if (BASE && BASE.relief) reliefLayers.push(new GridImage(data(BASE.relief), 'relief', BASE.grid));
   reliefLayers.forEach((l) => l.addTo(map));
   const reliefLayer = reliefLayers.length ? reliefLayers : null;
   const ctxLayer = ctxGJ ? L.geoJSON(ctxGJ, { renderer: L.svg({ pane: 'ctx' }), interactive: false }).addTo(map) : null;
@@ -222,15 +228,6 @@
     options: { position: 'bottomleft' },
     onAdd() { legendEl = el('div', 'legend'); L.DomEvent.disableClickPropagation(legendEl); renderLegend(); return legendEl; },
   });
-  const ramp = (title, stops, unit, endLabel) => {
-    const max = stops[stops.length - 1][0], row = el('div', 'ramp');
-    const bar = el('div', 'ramp-bar');
-    bar.style.background = 'linear-gradient(to right,' + stops.map((st) => st[1] + ' ' + (100 * st[0] / max).toFixed(1) + '%').join(',') + ')';
-    const ends = el('div', 'ramp-ends');
-    ends.append(el('span', null, '0'), el('span', null, max.toLocaleString('en-US') + (endLabel || '') + ' ' + unit));
-    row.append(el('div', 'ramp-t', title), bar, ends);
-    return row;
-  };
   function renderLegend() {
     if (!legendEl) return;
     legendEl.replaceChildren(el('div', 't', 'Chance of ≥1 in. snow on the ground, Dec 25'));
@@ -241,10 +238,6 @@
     });
     legendEl.append(bar, ticks);
     if (SURF.transparent_at_or_below !== undefined) legendEl.append(el('div', 'ramp-note', SURF.transparent_at_or_below + '% or less: no colour, terrain shows'));
-    if (BASE) {
-      const r = BASE.ramps[theme];
-      legendEl.append(ramp('Land elevation', r.land, 'ft', '+'), ramp('Ocean and lake depth', r.water, 'ft', '+'));
-    }
   }
   new Legend().addTo(map);
 
@@ -405,7 +398,7 @@
     root.dataset.theme = theme;
     document.querySelectorAll('[data-theme-set]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.themeSet === theme)));
     if (lineLayer) lineLayer.setStyle({ stroke: true, color: css('--border'), weight: 0.9, fill: false, lineJoin: 'round' });
-    if (baseLayer) baseLayer.setUrl('data/' + BASE[theme]);
+    if (baseLayer) baseLayer.setUrl(data(BASE[theme]));
     // with a base map the countries are only outlines; without one they are the flat grey context fill
     if (ctxLayer) ctxLayer.setStyle(BASE ? { stroke: true, color: css('--ctx-line'), weight: 0.8, fill: false }
       : { stroke: true, color: css('--ctx-line'), weight: 0.6, fill: true, fillColor: css('--ctx'), fillOpacity: 1 });

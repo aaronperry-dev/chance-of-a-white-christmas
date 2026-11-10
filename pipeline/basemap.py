@@ -96,6 +96,4 @@ def build_base(land_polys, lake_polys, us_projected, out_dir: Path, cache: Path,
     log.info("base map: %d x %d at %.0f m, %d lakes", grid.nx, grid.ny, grid.res, int(labels.max()))
     return {
         "grid": grid.as_meta(), "light": "base_light.webp", "dark": "base_dark.webp", "relief": "relief_ext.webp",
-        "ramps": {t: {"land": [list(s) for s in C.LAND_RAMP[t]], "water": [list(s) for s in C.WATER_RAMP[t]]}
-                  for t in ("light", "dark")},
     }

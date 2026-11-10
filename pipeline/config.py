@@ -111,11 +111,17 @@ WATER_RAMP = {
 
 # --- Estimation --------------------------------------------------------------
 # Terrain-aware: local regression of logit(probability) on elevation (tricube
-# weights over the K nearest stations) + IDW of the regression residuals, so
-# the surface still reproduces the station values (to a fraction of a point).
+# weights over the K nearest stations) + a smooth correction from the regression residuals.
 TERRAIN_K = 24
 RESID_POWER = 2.0
-RESID_EPS_M = 1000.0   # ~1 pixel: station values are reproduced to <0.5 percentage points
+# Residual correction: Gaussian-weighted mean of the neighbouring residuals with this length scale (m).
+# A 1/distance kernel (RESID_SMOOTH_M = 0, the old behaviour) reproduces stations almost exactly but draws
+# small bull's-eye patches around any unusual station; 10 km removes about half of the small closed
+# patches in flat terrain in tests and still reproduces stations to ~2 percentage points. The terrain
+# trend is not touched. RESID_SHRINK fades the correction to zero far from any station.
+RESID_SMOOTH_M = 10_000.0
+RESID_SHRINK = 0.05
+RESID_EPS_M = 1000.0   # only used when RESID_SMOOTH_M = 0 (IDW correction): station values reproduced to <0.5 points
 RIDGE_M = 100.0        # shrinks the elevation slope toward 0 where stations barely differ in height
 SLOPE_MAX = 0.01       # max logit units per metre of elevation
 EXTRAPOLATE_MARGIN_M = 300.0

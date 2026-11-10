@@ -2,11 +2,15 @@
 
 ``idw``      plain inverse-distance weighting of the percentages (baseline).
 ``terrain``  local regression of logit(probability) on elevation (tricube
-             weights over the K nearest stations) + IDW of the regression
-             residuals. The residual step makes the surface reproduce the station
-             values (to a fraction of a percentage point), while the regression step
-             lets the surface follow the terrain between stations (more snow on the
-             ridges, less in the valleys). The elevation slope is constrained to be
+             weights over the K nearest stations) + a correction from the regression
+             residuals. The regression step lets the surface follow the terrain between
+             stations (more snow on the ridges, less in the valleys); the residual step
+             pulls it toward the station values. By default (RESID_SMOOTH_M > 0) the
+             correction is a Gaussian-weighted mean, which is smooth, so an unusual
+             station makes a gentle bump instead of the spike-and-ring ("bull's-eye")
+             a 1/distance kernel draws; stations are then reproduced to about 2
+             percentage points rather than a fraction of one. RESID_SMOOTH_M = 0 restores
+             the exact-honouring IDW correction. The elevation slope is constrained to be
              >= 0 (higher = colder = more snow cover) and is shrunk toward 0 where
              nearby stations hardly differ in elevation.
 
@@ -70,6 +74,12 @@ class Estimator:
         tz = np.clip(tz, zz.min(1) - C.EXTRAPOLATE_MARGIN_M, zz.max(1) + C.EXTRAPOLATE_MARGIN_M)
         trend = ybar + b * (tz - zbar)
         resid = yv - (ybar[:, None] + b[:, None] * dz)
+        if C.RESID_SMOOTH_M > 0:
+            # Smooth, gently shrinking correction: Gaussian-weighted mean of the neighbours' residuals.
+            # It has no spike at the stations (the 1/d^p kernel's cusp is what draws bull's-eye rings) and
+            # fades to zero far from any station, leaving the terrain trend alone there.
+            wi = np.exp(-0.5 * (dist / C.RESID_SMOOTH_M) ** 2)
+            return expit_pct(trend + (wi * resid).sum(1) / (wi.sum(1) + C.RESID_SHRINK))
         wi = 1.0 / (dist + C.RESID_EPS_M) ** C.RESID_POWER
         return expit_pct(trend + (wi * resid).sum(1) / wi.sum(1))
 

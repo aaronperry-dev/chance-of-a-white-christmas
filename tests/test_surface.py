@@ -135,7 +135,7 @@ def test_idw_and_terrain_reproduce_station_values():
     for m in ("idw", "terrain"):
         est = I.Estimator(x, y, z, p, m)
         got = est.predict(x[:100] + 1.0, y[:100] + 1.0, z[:100])
-        assert np.abs(got - p[:100]).mean() < (3.0 if m == "idw" else 1.0), m
+        assert np.abs(got - p[:100]).mean() < (3.0 if m == "idw" else 2.5), m
 
 
 def test_terrain_beats_idw_when_elevation_matters_and_never_goes_out_of_range():
@@ -360,7 +360,7 @@ def test_build_with_base_map_writes_images_and_meta(tmp_path):
     b = meta["base"]
     for f in (b["light"], b["dark"], b["relief"]):
         assert Image.open(tmp_path / f).size == (bgrid.nx, bgrid.ny), f
-    assert b["grid"]["res"] == 50_000 and set(b["ramps"]) == {"light", "dark"} and meta["surface"]["transparent_at_or_below"] == 1.0
+    assert b["grid"]["res"] == 50_000 and "ramps" not in b and meta["surface"]["transparent_at_or_below"] == 1.0
     ov = np.asarray(Image.open(tmp_path / "overlay.png"))
     vals = np.frombuffer(gzip.decompress((tmp_path / "values.bin.gz").read_bytes()), np.uint8).reshape(grid.ny, grid.nx)
     low = (vals <= 1)
@@ -394,3 +394,50 @@ def test_borders_along_a_parallel_are_simplified_in_the_map_projection():
     lo, _ = geo.xy_to_lonlat(probe, ylat)
     _, yt = geo.lonlat_to_xy(lo, np.full_like(lo, 49.0))
     assert np.abs(yt - ylat).max() < 3500.0                                    # within the tolerance of the true parallel
+
+
+# ============================================================ smooth residual correction (no bull's-eyes)
+def _lump_field():
+    """A smooth truth plus one odd station that disagrees with its neighbours."""
+    rng = np.random.default_rng(9)
+    x, y = rng.uniform(0, 400_000, 500), rng.uniform(0, 400_000, 500)
+    z = np.full(500, 300.0)
+    p = np.clip(30 + 25 * (y / 400_000), 0, 100)
+    i = int(np.argmin((x - 200_000) ** 2 + (y - 200_000) ** 2))
+    p[i] = p[i] + 40                                                    # the unusual station
+    return x, y, z, p, i
+
+
+def test_smooth_residual_kernel_makes_a_gentle_bump_not_a_spike(monkeypatch):
+    x, y, z, p, i = _lump_field()
+    peaks = {}
+    for name, h in (("gauss", 10_000.0), ("idw", 0.0)):
+        monkeypatch.setattr(C, "RESID_SMOOTH_M", h)
+        est = I.Estimator(x, y, z, p, "terrain")
+        px_ = x[i] + np.array([0.0, 1_000.0, 4_000.0, 12_000.0]); py_ = np.full(4, y[i])
+        peaks[name] = est.predict(px_, py_, np.full(4, 300.0))
+    assert peaks["idw"][0] > peaks["gauss"][0] + 8                      # the IDW spike is taller at the station ...
+    assert peaks["gauss"][0] > 0.0 and np.isfinite(peaks["gauss"]).all()
+    steep = lambda v: abs(v[0] - v[2])
+    assert steep(peaks["gauss"]) < steep(peaks["idw"])                  # ... and falls off more gently
+
+
+def test_smooth_kernel_keeps_the_terrain_trend_and_fades_far_from_stations(monkeypatch):
+    rng = np.random.default_rng(3)
+    x, y = rng.uniform(0, 2e5, 400), rng.uniform(0, 2e5, 400)
+    z = rng.uniform(0, 1500, 400)
+    p = np.clip(100 / (1 + np.exp(-(-1.5 + 0.0035 * z))), 0, 100)       # truth depends on elevation only
+    monkeypatch.setattr(C, "RESID_SMOOTH_M", 10_000.0)
+    est = I.Estimator(x, y, z, p, "terrain")
+    lo = est.predict(np.array([1e5]), np.array([1e5]), np.array([100.0]))[0]
+    hi = est.predict(np.array([1e5]), np.array([1e5]), np.array([1400.0]))[0]
+    assert hi > lo + 20                                                  # still strongly elevation-aware
+    far = est.predict(np.array([5e6]), np.array([5e6]), np.array([700.0]))
+    assert np.isfinite(far).all() and 0 <= far[0] <= 100                 # no stations within reach: trend only, no blow-up
+
+
+def test_station_values_are_still_reproduced_closely():
+    x, y, z, p, i = _lump_field()
+    est = I.Estimator(x, y, z, p, "terrain")
+    err = np.abs(est.predict(x, y, z) - p)
+    assert np.median(err) < 2.0 and err.mean() < 4.0
