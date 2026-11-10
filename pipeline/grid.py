@@ -25,9 +25,12 @@ def polygon_extent(projected):
     return float(pts[:, 0].min()), float(pts[:, 1].min()), float(pts[:, 0].max()), float(pts[:, 1].max())
 
 
-def rasterize_mask(grid: LccGrid, projected, supersample: int = 2) -> np.ndarray:
-    """Land coverage 0..1 per pixel (anti-aliased by supersampling)."""
-    ss = supersample
+def rasterize_mask(grid: LccGrid, projected, supersample: int = 2, out_factor: int = 1) -> np.ndarray:
+    """Land coverage 0..1 per pixel (anti-aliased by supersampling).
+
+    ``out_factor`` > 1 returns the mask at that many output pixels per grid cell (drawn at 2x that, then averaged).
+    """
+    ss = supersample if out_factor == 1 else out_factor * 2
     img = Image.new("L", (grid.nx * ss, grid.ny * ss), 0)
     d = ImageDraw.Draw(img)
     for poly in projected:
@@ -36,7 +39,8 @@ def rasterize_mask(grid: LccGrid, projected, supersample: int = 2) -> np.ndarray
             py = (grid.y1 - ring[:, 1]) / grid.res * ss
             d.polygon(list(zip(px.tolist(), py.tolist())), fill=255 if k == 0 else 0)
     a = np.asarray(img, dtype=np.float32) / 255.0
-    return a.reshape(grid.ny, ss, grid.nx, ss).mean(axis=(1, 3))
+    blk = ss // out_factor
+    return a.reshape(grid.ny * out_factor, blk, grid.nx * out_factor, blk).mean(axis=(1, 3))
 
 
 def classify(values: np.ndarray, upper_edges=C.CLASS_UPPER_EDGES) -> np.ndarray:

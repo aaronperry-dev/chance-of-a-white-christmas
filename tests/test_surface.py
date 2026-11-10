@@ -236,7 +236,8 @@ def test_build_writes_consistent_assets(tmp_path):
     assert len(meta["classes"]) == 8 and meta["classes"][0]["hi"] == 10 and meta["classes"][-1]["hi"] == 100
     g = meta["grid"]
     assert (g["nx"], g["ny"], g["res"]) == (grid.nx, grid.ny, 15_000)
-    assert Image.open(tmp_path / "overlay.png").size == (grid.nx, grid.ny) == Image.open(tmp_path / "relief.webp").size
+    assert Image.open(tmp_path / "relief.webp").size == (grid.nx, grid.ny)
+    assert Image.open(tmp_path / "overlay.png").size == (grid.nx * C.OVERLAY_SCALE, grid.ny * C.OVERLAY_SCALE) and meta["surface"]["overlay_scale"] == C.OVERLAY_SCALE
     vals = np.frombuffer(gzip.decompress((tmp_path / "values.bin.gz").read_bytes()), np.uint8)
     assert vals.size == grid.nx * grid.ny and (vals == 255).any() and (vals < 255).any()
     s = meta["stats"]
@@ -250,7 +251,7 @@ def test_build_writes_consistent_assets(tmp_path):
         x, y = geo.lonlat_to_xy(r["lo"], r["la"]); c, ro = grid.to_pixel(x, y)
         v = arr[int(ro), int(c)]
         if v != 255: errs.append(abs(int(v) - r["p"]))
-    assert len(errs) > 100 and np.mean(errs) < 6
+    assert len(errs) > 100 and np.mean(errs) < 9        # the smooth surface follows the stations, not exactly
 
 
 def test_build_without_terrain_is_plain_idw_with_no_relief(tmp_path):
@@ -363,9 +364,11 @@ def test_build_with_base_map_writes_images_and_meta(tmp_path):
     assert b["grid"]["res"] == 50_000 and "ramps" not in b and meta["surface"]["transparent_at_or_below"] == 1.0
     ov = np.asarray(Image.open(tmp_path / "overlay.png"))
     vals = np.frombuffer(gzip.decompress((tmp_path / "values.bin.gz").read_bytes()), np.uint8).reshape(grid.ny, grid.nx)
-    low = (vals <= 1)
-    assert low.any() and (ov[..., 3][low] == 0).all()                           # nothing painted where the chance is 1 % or less
-    assert (ov[..., 3][(vals > 1) & (vals < 255)] > 0).mean() > 0.95
+    f = C.OVERLAY_SCALE
+    alpha = ov[..., 3].reshape(grid.ny, f, grid.nx, f).astype(float).mean(axis=(1, 3))     # overlay is f x the grid
+    low = (vals == 0)
+    assert low.any() and (alpha[low] == 0).all()                                # nothing painted where the chance is 0 %
+    assert (alpha[(vals > 4) & (vals < 255)] > 0).mean() > 0.95
 
 
 def test_build_without_base_removes_stale_base_files(tmp_path):
@@ -396,7 +399,7 @@ def test_borders_along_a_parallel_are_simplified_in_the_map_projection():
     assert np.abs(yt - ylat).max() < 3500.0                                    # within the tolerance of the true parallel
 
 
-# ============================================================ smooth residual correction (no bull's-eyes)
+# ============================================================ smoothing fit (no bull's-eyes)
 def _lump_field():
     """A smooth truth plus one odd station that disagrees with its neighbours."""
     rng = np.random.default_rng(9)
@@ -408,36 +411,106 @@ def _lump_field():
     return x, y, z, p, i
 
 
-def test_smooth_residual_kernel_makes_a_gentle_bump_not_a_spike(monkeypatch):
+def test_one_odd_station_does_not_draw_a_bump():
     x, y, z, p, i = _lump_field()
-    peaks = {}
-    for name, h in (("gauss", 10_000.0), ("idw", 0.0)):
-        monkeypatch.setattr(C, "RESID_SMOOTH_M", h)
-        est = I.Estimator(x, y, z, p, "terrain")
-        px_ = x[i] + np.array([0.0, 1_000.0, 4_000.0, 12_000.0]); py_ = np.full(4, y[i])
-        peaks[name] = est.predict(px_, py_, np.full(4, 300.0))
-    assert peaks["idw"][0] > peaks["gauss"][0] + 8                      # the IDW spike is taller at the station ...
-    assert peaks["gauss"][0] > 0.0 and np.isfinite(peaks["gauss"]).all()
-    steep = lambda v: abs(v[0] - v[2])
-    assert steep(peaks["gauss"]) < steep(peaks["idw"])                  # ... and falls off more gently
+    clean = p.copy(); clean[i] -= 40
+    est, ref = I.Estimator(x, y, z, p, "terrain"), I.Estimator(x, y, z, clean, "terrain")
+    px_ = x[i] + np.array([0.0, 1_000.0, 4_000.0, 12_000.0]); py_ = np.full(4, y[i])
+    got, want = est.predict(px_, py_, np.full(4, 300.0)), ref.predict(px_, py_, np.full(4, 300.0))
+    assert np.abs(got - want).max() < 8                                  # a 40-point outlier moves the surface by a few points
+    assert abs(got[0] - p[i]) > 20                                       # ... it is smoothed away, not honoured
+    assert np.isfinite(got).all()
 
 
-def test_smooth_kernel_keeps_the_terrain_trend_and_fades_far_from_stations(monkeypatch):
+def test_all_zero_stations_stay_near_zero_and_finite():
+    rng = np.random.default_rng(1)
+    x, y = rng.uniform(0, 3e5, 200), rng.uniform(0, 3e5, 200)
+    est = I.Estimator(x, y, np.full(200, 100.0), np.zeros(200), "terrain")
+    got = est.predict(np.array([1.5e5, 2e5]), np.array([1.5e5, 1e5]), np.array([100.0, 100.0]))
+    assert np.isfinite(got).all() and (got < 1.0).all()                  # no logit(0) blow-up, stays below the 1 % edge
+
+
+def test_terrain_trend_is_kept_and_far_field_is_finite():
     rng = np.random.default_rng(3)
     x, y = rng.uniform(0, 2e5, 400), rng.uniform(0, 2e5, 400)
     z = rng.uniform(0, 1500, 400)
     p = np.clip(100 / (1 + np.exp(-(-1.5 + 0.0035 * z))), 0, 100)       # truth depends on elevation only
-    monkeypatch.setattr(C, "RESID_SMOOTH_M", 10_000.0)
     est = I.Estimator(x, y, z, p, "terrain")
     lo = est.predict(np.array([1e5]), np.array([1e5]), np.array([100.0]))[0]
     hi = est.predict(np.array([1e5]), np.array([1e5]), np.array([1400.0]))[0]
     assert hi > lo + 20                                                  # still strongly elevation-aware
     far = est.predict(np.array([5e6]), np.array([5e6]), np.array([700.0]))
-    assert np.isfinite(far).all() and 0 <= far[0] <= 100                 # no stations within reach: trend only, no blow-up
+    assert np.isfinite(far).all() and 0 <= far[0] <= 100
 
 
-def test_station_values_are_still_reproduced_closely():
+def test_grid_surface_matches_pointwise_fit_and_is_smooth():
+    x, y, z, f = _field()
+    p = f(x, y, z)
+    grid = geo.LccGrid.from_extent(0, 0, 600_000, 600_000, 5_000)
+    dem = (300 + 700 * np.exp(-(((grid.x_centers()[None, :] - 300_000) / 120_000) ** 2)) * np.ones((grid.ny, 1))).astype(np.float32)
+    est = I.Estimator(x, y, z, p, "terrain")
+    land = np.ones((grid.ny, grid.nx), bool)
+    surf = I.interpolate_grid(est, grid, land, dem)
+    rr, cc = np.array([30, 60, 90]), np.array([40, 60, 80])
+    px_, py_ = grid.pixel_xy(rr, cc)
+    pt = est.predict(px_, py_, dem[rr, cc].astype(float))
+    assert np.abs(surf[rr, cc] - pt).max() < 4.0                         # coarse lattice + bicubic ~ the direct fit
+    assert np.abs(np.diff(surf, axis=1)).max() < 6.0                     # no jumps between neighbouring cells
+
+
+def test_choose_k_returns_a_candidate_with_lowest_cv():
+    x, y, z, f = _field()
+    k, cv = I.choose_k(x, y, z, f(x, y, z) + np.random.default_rng(0).normal(0, 4, len(x)).clip(-50, 50), candidates=(8, 16, 48))
+    assert k in (8, 16, 48) and cv["k"] == k and cv["rmse"] > 0
+
+
+def test_station_values_are_followed_but_not_chased():
     x, y, z, p, i = _lump_field()
     est = I.Estimator(x, y, z, p, "terrain")
     err = np.abs(est.predict(x, y, z) - p)
-    assert np.median(err) < 2.0 and err.mean() < 4.0
+    assert np.median(err) < 5.0 and err.mean() < 6.0
+
+
+# ============================================================ cartographic finishing
+from pipeline import cartography as CT  # noqa: E402
+
+
+def test_sieve_merges_small_flat_patches_but_keeps_big_ones_and_protected_summits():
+    code = np.zeros((60, 60), np.int16)
+    code[:, 30:] = 3
+    code[10:13, 10:13] = 3                    # 9-px island inside class 0  -> merged
+    code[40:43, 40:43] = 0                    # 9-px island inside class 3  -> merged
+    code[20:30, 5:15] = 5                     # 100-px patch                -> kept
+    code[50:53, 5:8] = 7                      # small but on protected relief -> kept
+    prot = np.zeros(code.shape, bool); prot[50:53, 5:8] = True
+    out = CT.sieve(code, 30, prot)
+    assert (out[10:13, 10:13] == 0).all() and (out[40:43, 40:43] == 3).all()
+    assert (out[20:30, 5:15] == 5).all() and (out[50:53, 5:8] == 7).all()
+    assert (CT.sieve(np.full((5, 5), -1, np.int16), 10) == -1).all()      # outside cells untouched
+
+
+def test_upsample_is_smooth_nan_safe_and_bounded():
+    v = np.array([[0, 50, 100, np.nan], [0, 50, 100, np.nan]], np.float32)
+    up = CT.upsample(v, 3)
+    assert up.shape == (6, 12) and not np.isnan(up).any() and up.min() >= 0 and up.max() <= 100
+    assert np.all(np.diff(up[0, :8]) >= -1e-3)                           # monotone through the ramp, no ringing
+
+
+def test_overlay_has_no_tiny_patches_in_flat_terrain(tmp_path):
+    grid, _ = make_grid(box_polys(), 10_000)
+    st = _stations(400)
+    st["prob"] = np.clip(np.random.default_rng(4).normal(3, 3, len(st)), 0, 100).round()      # noisy, near the 1 % edge
+    flat = np.full((grid.ny, grid.nx), 200.0, np.float32)
+    build(st, box_polys(), tmp_path, grid=grid, dem=flat, synthetic=True)
+    ov = np.asarray(Image.open(tmp_path / "overlay.png"))
+    rgb = ov[..., :3].astype(np.int64)
+    key = np.where(ov[..., 3] > 0, rgb[..., 0] * 65536 + rgb[..., 1] * 256 + rgb[..., 2], -1)
+    key[ov[..., 3] == 0] = -1
+    from scipy import ndimage
+    min_px = int(round(C.MIN_REGION_KM2 / (10.0 / C.OVERLAY_SCALE) ** 2))
+    for k in np.unique(key[key >= 0]):
+        lab, n = ndimage.label(key == k)
+        sizes = np.bincount(lab.ravel())[1:]
+        edge = ndimage.binary_dilation(ov[..., 3] == 0, iterations=2)                    # patches cut by the coast may be small
+        small = [i + 1 for i, sz in enumerate(sizes) if sz < min_px and not edge[lab == i + 1].any()]
+        assert not small, (k, len(small))

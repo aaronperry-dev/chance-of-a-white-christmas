@@ -110,26 +110,31 @@ WATER_RAMP = {
 }
 
 # --- Estimation --------------------------------------------------------------
-# Terrain-aware: local regression of logit(probability) on elevation (tricube
-# weights over the K nearest stations) + a smooth correction from the regression residuals.
-TERRAIN_K = 24
-RESID_POWER = 2.0
-# Residual correction: Gaussian-weighted mean of the neighbouring residuals with this length scale (m).
-# A 1/distance kernel (RESID_SMOOTH_M = 0, the old behaviour) reproduces stations almost exactly but draws
-# small bull's-eye patches around any unusual station; 10 km removes about half of the small closed
-# patches in flat terrain in tests and still reproduces stations to ~2 percentage points. The terrain
-# trend is not touched. RESID_SHRINK fades the correction to zero far from any station.
-RESID_SMOOTH_M = 10_000.0
-RESID_SHRINK = 0.05
-RESID_EPS_M = 1000.0   # only used when RESID_SMOOTH_M = 0 (IDW correction): station values reproduced to <0.5 points
-RIDGE_M = 100.0        # shrinks the elevation slope toward 0 where stations barely differ in height
-SLOPE_MAX = 0.01       # max logit units per metre of elevation
+# Terrain-aware surface = local (geographically weighted) quasi-binomial regression of the station
+# frequency on elevation, fitted on a coarse node lattice and bicubic-upsampled, with the elevation term
+# re-applied from the 1 km DEM. There is deliberately NO residual/"honour the stations" step: each station
+# is a 30-year frequency (steps of ~3 %), so at the low end one station reading 0 % or 7 % is mostly sampling
+# noise, and any kernel that pulls the surface toward it draws a round patch around it (the circles).
+# A smoothing fit (like ANUSPLIN / PRISM's weighted regressions) averages that noise out instead.
+TERRAIN_K = 24                         # neighbours used when no cross-validation is run
+TERRAIN_K_CANDIDATES = (12, 16, 24, 32, 48)   # >= 12: fewer neighbours chase single noisy stations   # build() keeps the K with the lowest leave-one-out error
+STATION_YEARS_EFF = 30.0               # a station frequency is ~ k / 30 (1991-2020); used as binomial n
+FREQ_PSEUDO = 0.1                      # added to the success and failure counts so 0 % / 100 % stay finite
+NODE_SPACING_M = 8000.0                # coarse lattice for the regression (surface is bicubic-upsampled)
+RIDGE_M = 100.0                        # shrinks the elevation slope toward 0 where stations barely differ in height
+SLOPE_MAX = 0.01                       # max logit units per metre of elevation
 EXTRAPOLATE_MARGIN_M = 300.0
-LOGIT_EPS = 0.005
+LOGIT_LIMIT = 12.0
+IRLS_ITERS = 6
 # Plain IDW baseline (used when no DEM is available, and as the CV benchmark).
 IDW_K = 16
 IDW_POWER = 2.0
 IDW_EPS_M = 5000.0
+
+# --- Cartographic finishing ---------------------------------------------------
+OVERLAY_SCALE = 2                      # overlay PNG pixels per grid cell (class edges drawn from a bicubic upsample)
+MIN_REGION_KM2 = 150.0                 # smaller flat-terrain colour patches are merged into the surrounding class
+SIEVE_RELIEF_M = 120.0                 # ...but not where the DEM varies by more than this over ~5 km (real summits)
 
 # --- Legend (NOAA's 8 classes) -------------------------------------------------
 # Labels and breaks follow NOAA's maps: 0-10, 11-25, 26-40, 41-50, 51-60, 61-75, 76-90, 91-100 %.

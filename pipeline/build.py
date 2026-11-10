@@ -30,8 +30,9 @@ from .boundary import load_conus_polygons, load_lake_polygons, load_land_polygon
 from .fetch import FetchError, ensure_file
 from . import basemap
 from .geo import LccGrid, lonlat_to_xy
+from . import cartography as cart
 from .grid import classify, polygon_extent, project_polygons, rasterize_mask
-from .interp import Estimator, interpolate_grid, loo_cv
+from .interp import Estimator, choose_k, interpolate_grid, loo_cv
 from .render import area_stats, render_overlay, render_relief, write_value_grid
 
 log = logging.getLogger("pipeline")
@@ -62,6 +63,22 @@ def _station_pixels(st: pd.DataFrame, grid: LccGrid):
     px, py = grid.to_pixel(x, y)
     return (np.asarray(x), np.asarray(y),
             np.clip(py.astype(int), 0, grid.ny - 1), np.clip(px.astype(int), 0, grid.nx - 1))
+
+
+def _write_overlay(values: np.ndarray, dem: np.ndarray | None, grid: LccGrid, projected, path: Path) -> None:
+    """Overlay PNG at OVERLAY_SCALE x the grid: classes are cut from a bicubic upsample of the smooth surface (so
+    class edges are smooth curves, not pixel stairs), then tiny flat-terrain patches are merged into their surroundings."""
+    f = C.OVERLAY_SCALE
+    v = cart.upsample(values, f)
+    cov = rasterize_mask(grid, projected, out_factor=f)
+    code = classify(v).astype(np.int16)
+    code[np.round(v) <= C.TRANSPARENT_AT_OR_BELOW_PCT] = cart.TRANSPARENT
+    code[cov <= 0.02] = -1
+    protect = cart.upsample_nearest(cart.relief_mask(dem, C.SIEVE_RELIEF_M), f) if dem is not None else None
+    min_px = max(1, int(round(C.MIN_REGION_KM2 / (grid.res / 1000.0 / f) ** 2)))
+    code = cart.sieve(code, min_px, protect)
+    clear = code == cart.TRANSPARENT
+    render_overlay(np.where(clear, 0, code).astype(np.int8), cov, C.NOAA_COLORS, path, transparent=clear)
 
 
 def build(stations: pd.DataFrame, polygons, out_dir: Path, *, res: float = C.GRID_RES_M, dem: np.ndarray | None = None,
@@ -100,14 +117,14 @@ def build(stations: pd.DataFrame, polygons, out_dir: Path, *, res: float = C.GRI
         # station elevation in the SAME (1 km DEM) space as the grid cells it is compared with
         sz = dem[sr, sc].astype(float)
         cv["idw"] = loo_cv(sx, sy, sz, prob, "idw")
-        cv["terrain"] = loo_cv(sx, sy, sz, prob, "terrain")
-        log.info("leave-one-out RMSE (pct points): IDW %.2f | terrain-aware %.2f  (n=%d)",
-                 cv["idw"]["rmse"], cv["terrain"]["rmse"], cv["terrain"]["n"])
+        k_best, cv["terrain"] = choose_k(sx, sy, sz, prob)
+        log.info("leave-one-out RMSE (pct points): IDW %.2f | terrain-aware %.2f with K=%d  (n=%d)",
+                 cv["idw"]["rmse"], cv["terrain"]["rmse"], k_best, cv["terrain"]["n"])
         if cv["terrain"]["rmse"] <= cv["idw"]["rmse"]:
             method = "terrain"
         else:
             log.warning("terrain-aware model did not beat IDW in cross-validation; using IDW (relief is still drawn)")
-        est = Estimator(sx, sy, sz, prob, method)
+        est = Estimator(sx, sy, sz, prob, method, k=k_best if method == "terrain" else None)
         values = interpolate_grid(est, grid, land, dem)
     else:
         est = Estimator(sx, sy, np.zeros_like(sx), prob, "idw")
@@ -116,8 +133,7 @@ def build(stations: pd.DataFrame, polygons, out_dir: Path, *, res: float = C.GRI
     cv["chosen"] = method
 
     cls = classify(values)
-    render_overlay(cls, coverage, C.NOAA_COLORS, out_dir / "overlay.png", values=values,
-                   transparent_at_or_below=C.TRANSPARENT_AT_OR_BELOW_PCT)
+    _write_overlay(values, dem, grid, projected, out_dir / "overlay.png")
     write_value_grid(values, coverage, out_dir / "values.bin.gz")
     has_relief = dem is not None
     if has_relief:
@@ -158,7 +174,7 @@ def build(stations: pd.DataFrame, polygons, out_dir: Path, *, res: float = C.GRI
         "crs": {"name": C.LCC_NAME, "proj4": C.LCC_PROJ, "extent": list(C.NOAA_EXTENT)},
         "grid": grid.as_meta(),
         "conus_extent": [round(v, 1) for v in polygon_extent(projected)],
-        "surface": {"overlay": "overlay.png", "relief": "relief.webp" if has_relief else None,
+        "surface": {"overlay": "overlay.png", "overlay_scale": C.OVERLAY_SCALE, "relief": "relief.webp" if has_relief else None,
                     "values": "values.bin.gz", "nodata": 255, "method": method,
                     "transparent_at_or_below": C.TRANSPARENT_AT_OR_BELOW_PCT,
                     "dem": dem_label if has_relief else "", "cv": cv},

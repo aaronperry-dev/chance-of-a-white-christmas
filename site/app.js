@@ -70,7 +70,7 @@
   $('#kpi-le10').textContent = pct(meta.stats.share_le_10);
   const cv = SURF.cv && SURF.cv[SURF.cv.chosen];
   $('#method').textContent = SURF.method === 'terrain'
-    ? 'terrain-aware (local regression on elevation plus residual interpolation)' : 'inverse-distance interpolation';
+    ? 'terrain-aware (a smoothed local regression of the chance on elevation)' : 'inverse-distance interpolation';
   $('#dem').textContent = SURF.dem ? ' Elevation: ' + SURF.dem + '.' : ' No terrain data was used.';
   $('#cv').textContent = cv ? 'Leave-one-out check at the stations: typical error ' + cv.mae.toFixed(1) + ' percentage points (RMS ' + cv.rmse.toFixed(1) + ').' : '';
   $('#kpi-n').textContent = meta.n_stations.toLocaleString('en-US');

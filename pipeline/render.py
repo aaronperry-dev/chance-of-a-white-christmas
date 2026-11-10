@@ -18,7 +18,8 @@ def _rgb(hex_color: str) -> tuple[int, int, int]:
 
 
 def render_overlay(cls: np.ndarray, coverage: np.ndarray, colors: list[str], path: Path,
-                   values: np.ndarray | None = None, transparent_at_or_below: float | None = None) -> None:
+                   values: np.ndarray | None = None, transparent_at_or_below: float | None = None,
+                   transparent: np.ndarray | None = None) -> None:
     """RGBA PNG: class colour, alpha = land coverage (anti-aliased coast).
 
     Cells whose (rounded) value is ``transparent_at_or_below`` or less get alpha 0 so the base map shows through.
@@ -26,7 +27,9 @@ def render_overlay(cls: np.ndarray, coverage: np.ndarray, colors: list[str], pat
     lut = np.array([_rgb(c) for c in colors], dtype=np.uint8)
     rgba = np.zeros(cls.shape + (4,), dtype=np.uint8)
     ok = cls >= 0
-    if values is not None and transparent_at_or_below is not None:
+    if transparent is not None:
+        ok &= ~transparent
+    elif values is not None and transparent_at_or_below is not None:
         with np.errstate(invalid="ignore"):
             ok &= ~(np.round(values) <= transparent_at_or_below)     # the rounded value the page reports
     rgba[ok, :3] = lut[cls[ok]]
