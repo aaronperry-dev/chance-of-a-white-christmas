@@ -237,7 +237,6 @@
       ticks.append(el('span', null, i < classes.length - 1 ? String(c.hi) : ''));
     });
     legendEl.append(bar, ticks);
-    if (SURF.transparent_at_or_below !== undefined) legendEl.append(el('div', 'ramp-note', SURF.transparent_at_or_below + '% or less: no colour, terrain shows'));
   }
   new Legend().addTo(map);
 
@@ -349,7 +348,8 @@
   function selectStation(s, fly) {
     last = { type: 'station', s };
     setMarker(L.latLng(s.la, s.lo));
-    if (fly) map.flyTo([s.la, s.lo], Math.max(map.getZoom(), 4), { duration: 0.8 });
+    /* one GPU-scaled zoom animation: flyTo re-lays-out every big image on each of ~75 frames and stutters */
+    if (fly) map.setView([s.la, s.lo], Math.max(map.getZoom(), 4), { animate: true, duration: 0.6, easeLinearity: 0.4 });
     renderReadout(s.p, KIND_STN, [['Station: ', stationName(s), ''], ...stationFacts(s), ['ID: ', s.id, '']]);
   }
   const rerenderLast = () => { if (last) { last.type === 'point' ? selectPoint(last.ll) : selectStation(last.s, false); } };

@@ -67,7 +67,6 @@ h1 { margin: 0 0 4px; font-size: 28px; line-height: 1.2; letter-spacing: -0.01em
 .rng input { width: 96px; accent-color: var(--accent); vertical-align: middle; }
 .rng { margin-right: 10px; }
 .rng input:disabled { opacity: .4; }
-.tool-note { max-width: var(--page-max); margin: -4px auto 12px; padding: 0 20px; color: var(--ink-3); font-size: 12.5px; }
 .find { position: relative; margin-left: auto; }
 .find input { background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 7px 11px; width: 240px; font: inherit; font-size: 14px; }
 .find input::placeholder { color: var(--ink-3); }
@@ -127,7 +126,6 @@ h1 { margin: 0 0 4px; font-size: 28px; line-height: 1.2; letter-spacing: -0.01em
 .legend .ticks { margin-top: 3px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
 .legend .ticks span { flex: 1; text-align: right; transform: translateX(50%); }
 .legend .ticks span:last-child { visibility: hidden; }
-.legend .ramp-note { margin-top: 5px; color: var(--ink-3); font-size: 11.5px; }
 
 /* on-map station switch */
 .map-toggle { font: inherit; font-size: 13px; padding: 6px 11px; border-radius: 6px; cursor: pointer;
@@ -173,6 +171,7 @@ h1 { margin: 0 0 4px; font-size: 28px; line-height: 1.2; letter-spacing: -0.01em
 .foot { color: var(--ink-3); font-size: 13px; padding-top: 14px; padding-bottom: 36px; }
 .foot p { margin: 0 0 6px; max-width: 110ch; }
 .foot strong { color: var(--ink-2); }
+.foot summary { cursor: pointer; color: var(--ink-2); font-weight: 600; margin-bottom: 8px; }
 
 @media (max-width: 640px) { .legend { margin-bottom: 28px; } }
 @media (max-width: 960px) {

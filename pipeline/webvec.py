@@ -59,7 +59,7 @@ def simplify_ll(ring_ll: np.ndarray, eps_m: float) -> np.ndarray:
     return ll[rdp_mask(np.column_stack([x, y]), eps_m)]
 
 
-def _ring(r, eps_m: float, nd: int = 3) -> list:
+def _ring(r, eps_m: float, nd: int = 4) -> list:
     pts = simplify_ll(r, eps_m)
     if len(pts) < 4:
         return []
@@ -105,7 +105,7 @@ def build_vectors(admin1: Path, countries: Path, places: Path, out_dir: Path) ->
         p = f.get("properties") or {}
         if p.get("admin") != "United States of America" or p.get("name") in C.NON_CONUS:
             continue
-        EPS[0] = 500.0          # ~1/3 pixel at the finest zoom
+        EPS[0] = C.STATE_LINE_EPS_M
         feat = _feature(_geom_polys(f["geometry"]), {"name": p.get("name"), "postal": p.get("postal")})
         if feat:
             states.append(feat)
@@ -122,7 +122,7 @@ def build_vectors(admin1: Path, countries: Path, places: Path, out_dir: Path) ->
         p = f.get("properties") or {}
         if p.get("ADM0_A3") not in ("CAN", "MEX"):
             continue
-        EPS[0] = 3000.0         # context only; ~1 pixel at the opening zoom
+        EPS[0] = C.CONTEXT_LINE_EPS_M
         polys = []
         for poly in _geom_polys(f["geometry"]):
             r = np.asarray(poly[0], float)

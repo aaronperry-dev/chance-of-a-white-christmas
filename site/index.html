@@ -54,7 +54,7 @@
   <label class="rng"><span class="sr">Relief strength</span><input type="range" id="r-relief" min="0" max="100" value="65" aria-label="Relief strength"></label>
   <label class="chk"><input type="checkbox" id="t-lines"> State lines</label>
   <label class="chk"><input type="checkbox" id="t-labels"> Place labels</label>
-  <label class="chk"><input type="checkbox" id="t-noaa"> NOAA tiles (reference)</label>
+  <label class="chk" title="NOAA’s own rendering, for comparison; its images have station dots and city names baked in"><input type="checkbox" id="t-noaa"> NOAA tiles (reference)</label>
   <label class="chk"><input type="checkbox" id="t-hover" checked> Hover info</label>
   <label class="chk"><input type="checkbox" id="t-wide"> Wide map</label>
   <div class="find">
@@ -62,8 +62,6 @@
     <ul id="find-results" role="listbox" hidden></ul>
   </div>
 </section>
-<p class="tool-note">The coloured surface is estimated here from NOAA’s station values and terrain, so every layer above can be switched off. Where the chance is 1% or less the surface is left clear so the land-elevation and ocean-depth map underneath shows. “NOAA tiles” overlays NOAA’s own rendering for comparison; those images have their own station dots and city names baked in.</p>
-
 <main class="layout" id="layout">
   <div class="mapwrap">
     <div id="map" aria-label="Map of the probability of a white Christmas. Click a point to see the nearest weather station."></div>
@@ -89,15 +87,17 @@
           <tbody></tbody>
         </table>
       </details>
-      <p class="note">Counts the weather stations inside the current map view, whether or not their dots are shown — not land area. Pan or zoom to update.</p>
     </section>
   </aside>
 </main>
 
 <footer class="page foot">
+<details>
+<summary>About this map</summary>
   <p><strong>Map.</strong> A grid of roughly 0.6-mile cells in NOAA’s projection (North America Lambert Conformal Conic, ESRI:102009), classed with NOAA’s eight ranges and colours. NOAA publishes the station values and cached map tiles but no raw grid, and its tiles have station dots and labels drawn into the images, so the surface is re-created from the same station values using a <span id="method">terrain-aware</span> estimate.<span id="dem"></span> Terrain relief is a hillshade of that elevation data. <span id="cv"></span> The estimate is a model between stations, not a measurement; where stations are sparse, mountains in particular, it can be off by more.</p>
   <p><strong>Stations.</strong> Dots, search and the station table use NOAA NCEI’s station values (<a id="src-link" href="https://www.ncei.noaa.gov/media/3501">source</a> · <a href="data/stations.csv">stations.csv</a>). Climatology is not a forecast; check <a href="https://www.weather.gov/">weather.gov</a> within a week of the holiday.</p>
   <p><strong>NOAA reference tiles.</strong> <a id="tiles-link" href="https://tiles.arcgis.com/tiles/C8EMgrsFcRFL6LrL/arcgis/rest/services/Christmas_Snow_2020normals_Lambert_update/MapServer">Christmas_Snow_2020normals_Lambert_update</a> map service. <span id="credit"></span> Elevation: AWS Open Data Terrain Tiles. State lines and place labels: Natural Earth. <span id="built"></span></p>
+</details>
 </footer>
 
 <script src="vendor/leaflet/leaflet.js"></script>

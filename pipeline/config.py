@@ -40,10 +40,10 @@ HILLSHADE_GAIN = 1.0
 
 # --- Boundaries / context (Natural Earth, via GitHub) ------------------------
 _NE = "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/"
-BOUNDARY_URL = _NE + "ne_50m_admin_1_states_provinces.geojson"
-BOUNDARY_FILE = "ne_50m_admin_1_states_provinces.geojson"
-COUNTRIES_URL = _NE + "ne_50m_admin_0_countries.geojson"
-COUNTRIES_FILE = "ne_50m_admin_0_countries.geojson"
+BOUNDARY_URL = _NE + "ne_10m_admin_1_states_provinces.geojson"
+BOUNDARY_FILE = "ne_10m_admin_1_states_provinces.geojson"
+COUNTRIES_URL = _NE + "ne_10m_admin_0_countries.geojson"
+COUNTRIES_FILE = "ne_10m_admin_0_countries.geojson"
 PLACES_URL = _NE + "ne_50m_populated_places_simple.geojson"
 PLACES_FILE = "ne_50m_populated_places_simple.geojson"
 
@@ -90,11 +90,11 @@ M_TO_FT = 3.280839895
 # --- Base map: land elevation + bathymetry colour ramps -----------------------
 # A coarse raster over NOAA's whole view extent (US, Canada, Mexico, oceans, lakes) drawn under the
 # probability surface; it is what shows through where the chance is TRANSPARENT_AT_OR_BELOW_PCT or less.
-BASE_RES_M = 2000
+BASE_RES_M = 1000
 BASE_PAD_M = 400_000
-BASE_DEM_ZOOM = 6          # ~2 km/px at these latitudes; the 1 km DEM is only needed for the surface
-LAKES_URL = _NE + "ne_50m_lakes.geojson"
-LAKES_FILE = "ne_50m_lakes.geojson"
+BASE_DEM_ZOOM = 6          # ~2 km/px at these latitudes (smoothly resampled to BASE_RES_M); coast and lake edges come from the 1:10m vectors
+LAKES_URL = _NE + "ne_10m_lakes.geojson"
+LAKES_FILE = "ne_10m_lakes.geojson"
 # (elevation ft, colour) for land; (depth ft, colour) for ocean and lakes. Light and dark themes.
 LAND_RAMP = {
     "light": [(0, "#a8c98f"), (500, "#c3dba0"), (1300, "#e0e6a9"), (2600, "#ecdfa2"), (4300, "#e2c690"),
@@ -130,6 +130,10 @@ IRLS_ITERS = 6
 IDW_K = 16
 IDW_POWER = 2.0
 IDW_EPS_M = 5000.0
+
+# Vector line detail (metres of allowed deviation in the map projection; Natural Earth 1:10m source).
+STATE_LINE_EPS_M = 100.0
+CONTEXT_LINE_EPS_M = 400.0
 
 # --- Cartographic finishing ---------------------------------------------------
 OVERLAY_SCALE = 2                      # overlay PNG pixels per grid cell (class edges drawn from a bicubic upsample)

@@ -16,7 +16,7 @@ A static dashboard for GitHub Pages: the historical probability of **at least 1 
 * **NOAA tiles (reference):** a switch overlays NOAA's own rendering, for comparing against the generated surface. Its dots and labels are part of NOAA's images.
 * **Units:** everything the page shows is imperial: probabilities in percent, snow depth in inches, elevations and depths in feet (station elevations in `stations.json` and `stations.csv` are feet too), distances in miles. Internally the pipeline still works in metres (the projection, the grid, the terrain tiles); that never reaches the page.
 * **Opening view:** the map opens framed on the contiguous U.S. (not NOAA's larger extent) and "Wide map" re-frames it the same way if you are still looking at the whole country. You can still pan and zoom out to NOAA's full extent.
-* **Wide map**, state lines (on by default) and place labels (off) from Natural Earth.
+* **Wide map**, state lines (on by default) and place labels (off). Coastlines, borders, lakes and the land mask come from Natural Earth 1:10m, the finest scale it publishes; lines are simplified to within about 330 ft (state lines) in the map projection. The land and water base map is drawn at 1 km cells. The "About this map" notes under the map are collapsed by default.
 
 ```
 pipeline/            Python: stations + AWS terrain -> surface (overlay.png, relief.webp, values.bin.gz) + stations + meta.json
@@ -50,7 +50,7 @@ Flags: `--source arcgis|xlsx|auto`, `--stations FILE` (local xlsx/csv), `--prob-
 
 * NOAA feature layer unreachable → the build falls back to the NCEI spreadsheet; if both fail it prints both reasons. A download that is not really an Excel file (e.g. an HTML error page) is rejected and never cached. You can also hand-place either input in `data/raw/` (`stations_arcgis.json` or `Christmas_day_snow_statistics_1991-2020_updated.xlsx`); files already there are used without touching the network.
 * The spreadsheet loader finds columns by header text. If the layout differs, or two probability columns look equally plausible, it stops and prints every header instead of guessing — re-run with `--prob-col "<exact header>"`.
-* The state boundaries (Natural Earth, `ne_50m_admin_1_states_provinces.geojson`) are required: they define the land the surface covers. Hand-place the file in `data/raw/` if a runner cannot download it. The state-line / place-label / Canada-Mexico overlays are optional and skipped if their downloads fail.
+* The state boundaries (Natural Earth, `ne_10m_admin_1_states_provinces.geojson`, about 40 MB; the countries and lakes files are also 1:10m) are required: they define the land the surface covers. Hand-place the file in `data/raw/` if a runner cannot download it. The state-line / place-label / Canada-Mexico overlays are optional and skipped if their downloads fail.
 * AWS terrain tiles unreachable → the build stops with the tile that failed. `--no-terrain` builds the plain interpolated surface without relief.
 
 ## Caveats
