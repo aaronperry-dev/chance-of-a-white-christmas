@@ -4,7 +4,7 @@
   --ink: #e8eaed; --ink-2: #aab1b9; --ink-3: #7f8790;
   --accent: #9ecae1;
   --warn-bg: #3a2c05; --warn-ink: #ffd66b; --warn-line: #5c4608;
-  --water: #101215;  --ctx: #23272c;  --ctx-line: rgba(255,255,255,.14);
+  --water: #142330;  --ctx: #23272c;  --ctx-line: rgba(255,255,255,.14);
   --border: rgba(255,255,255,.55);
   --lbl: #e3e7ec;  --halo: rgba(14,17,21,.92);
   --glass: rgba(18,20,23,.88);  --hover: #262b31;
@@ -17,7 +17,7 @@
   --ink: #14181d; --ink-2: #444c56; --ink-3: #5f6872;
   --accent: #1c5fa8;
   --warn-bg: #fff3cd; --warn-ink: #5c4300; --warn-line: #e6c75a;
-  --water: #e6e8eb;  --ctx: #c9ccd1;  --ctx-line: rgba(30,40,50,.25);
+  --water: #7f9fba;  --ctx: #c9ccd1;  --ctx-line: rgba(30,40,50,.25);
   --border: rgba(30,40,50,.6);
   --lbl: #1d242b;  --halo: rgba(255,255,255,.92);
   --glass: rgba(255,255,255,.92);  --hover: #eaeef2;
@@ -127,6 +127,11 @@ h1 { margin: 0 0 4px; font-size: 28px; line-height: 1.2; letter-spacing: -0.01em
 .legend .ticks { margin-top: 3px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
 .legend .ticks span { flex: 1; text-align: right; transform: translateX(50%); }
 .legend .ticks span:last-child { visibility: hidden; }
+.legend .ramp-note { margin-top: 5px; color: var(--ink-3); font-size: 11.5px; }
+.legend .ramp { margin-top: 8px; width: 270px; max-width: 70vw; }
+.legend .ramp-t { color: var(--ink-2); margin-bottom: 3px; }
+.legend .ramp-bar { height: 8px; border-radius: 3px; border: 1px solid var(--sw-edge); }
+.legend .ramp-ends { display: flex; justify-content: space-between; margin-top: 2px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
 
 /* on-map station switch */
 .map-toggle { font: inherit; font-size: 13px; padding: 6px 11px; border-radius: 6px; cursor: pointer;

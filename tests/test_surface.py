@@ -12,6 +12,7 @@ from PIL import Image
 
 from pipeline import config as C
 from pipeline import dem as D
+from pipeline import basemap as BM
 from pipeline import geo, grid as G, interp as I, render as R
 from pipeline.build import build, make_grid
 
@@ -176,8 +177,21 @@ def test_overlay_uses_class_colours_and_coverage_alpha(tmp_path):
     cls = np.array([[0, 7, -1]], np.int8)
     R.render_overlay(cls, np.array([[1.0, 0.5, 1.0]], np.float32), C.NOAA_COLORS, tmp_path / "o.png")
     px = np.asarray(Image.open(tmp_path / "o.png"))[0]
-    assert tuple(px[0]) == (0x3b, 0x3b, 0x3b, 255) and tuple(px[1]) == (255, 255, 255, 128) and px[2, 3] == 0
+    c0 = tuple(int(C.NOAA_COLORS[0][i:i + 2], 16) for i in (1, 3, 5))
+    assert tuple(px[0]) == (*c0, 255) and tuple(px[1]) == (255, 255, 255, 128) and px[2, 3] == 0
 
+
+def test_overlay_is_transparent_below_the_threshold(tmp_path):
+    vals = np.array([[0.0, 4.9, 5.0, 7.0, 95.0, np.nan]], np.float32)
+    R.render_overlay(G.classify(vals), np.ones((1, 6), np.float32), C.NOAA_COLORS, tmp_path / "o.png",
+                     values=vals, transparent_below=5.0)
+    a = np.asarray(Image.open(tmp_path / "o.png"))[0, :, 3]
+    assert a.tolist() == [0, 0, 255, 255, 255, 0]               # 5.0 itself is kept; below it the base map shows
+
+
+def test_two_darkest_classes_are_lighter_than_noaa_originals():
+    lum = lambda h: sum(int(h[i:i + 2], 16) for i in (1, 3, 5)) / 3
+    assert lum(C.NOAA_COLORS[0]) > lum("#3b3b3b") and lum(C.NOAA_COLORS[1]) > lum("#304469")
 
 def test_relief_is_transparent_on_flat_ground_and_visible_on_slopes(tmp_path):
     shade = np.array([[128, 128, 40, 230]], np.uint8)
@@ -261,3 +275,81 @@ def test_build_drops_stations_outside_conus(tmp_path):
     st = _stations(12)
     st.loc[0, ["lat", "lon"]] = [61.2, -149.9]          # Anchorage
     assert build(st, box_polys(), tmp_path, res=20_000, use_terrain=False)["n_stations"] == 11
+
+
+# ============================================================ base map (land elevation + bathymetry)
+def test_ramp_interpolates_and_clamps():
+    stops = [(0, "#000000"), (100, "#ff8000")]
+    got = BM.ramp(np.array([-50.0, 0.0, 50.0, 100.0, 9999.0]), stops)
+    assert np.abs(got.astype(int) - [[0, 0, 0], [0, 0, 0], [128, 64, 0], [255, 128, 0], [255, 128, 0]]).max() <= 1
+    for t in ("light", "dark"):
+        for table in (C.LAND_RAMP, C.WATER_RAMP):
+            xs = [x for x, _ in table[t]]
+            assert xs == sorted(xs) and xs[0] == 0 and all(c.startswith("#") and len(c) == 7 for _, c in table[t])
+
+
+def test_rasterize_labels_numbers_polygons_and_punches_holes():
+    grid = geo.LccGrid(0, 100, 1, 100, 100)
+    outer = np.array([[10, 90], [60, 90], [60, 40], [10, 40], [10, 90]], float)
+    hole = np.array([[25, 75], [40, 75], [40, 55], [25, 55], [25, 75]], float)
+    other = np.array([[70, 30], [90, 30], [90, 10], [70, 10], [70, 30]], float)
+    lab = BM.rasterize_labels(grid, [[outer, hole], [other]])
+    assert lab[20, 15] == 1 and lab[35, 30] == 0 and lab[80, 80] == 2 and lab[5, 5] == 0
+
+
+def test_water_depth_ocean_and_lakes():
+    dem = np.full((4, 6), 100.0, np.float32)
+    dem[0, :2] = [-30.0, -400.0]                    # ocean
+    dem[2:, 3:] = [[180.0, 150.0, 120.0], [180.0, 180.0, 60.0]]       # a lake with 180 m surface and bathymetry
+    labels = np.zeros((4, 6), np.int32); labels[2:, 3:] = 1
+    d = BM.water_depth(dem, np.ones((4, 6), np.float32), labels)
+    assert d[0, :2].tolist() == [30.0, 400.0] and d[1, 0] == 0.0
+    assert d[2, 3:].tolist() == pytest.approx([0.0, 30.0, 60.0], abs=6.0) or d[3, 5] > d[3, 3]
+    assert d[3, 5] > d[2, 5] > 0 and d[2, 3] < d[2, 5]
+
+
+def test_colorize_uses_land_ramp_on_land_and_water_ramp_for_lakes_and_sea():
+    dem = np.array([[500.0, 500.0, -2000.0]], np.float32)
+    land_cov = np.array([[1.0, 1.0, 0.0]], np.float32)
+    lake = np.array([[False, True, False]])
+    depth = np.array([[0.0, 100.0, 2000.0]], np.float32)
+    rgb = BM.colorize(dem, land_cov, lake, depth, "light")[0]
+    assert tuple(rgb[0]) == tuple(BM.ramp(np.array([500.0]), C.LAND_RAMP["light"])[0])
+    assert tuple(rgb[1]) == tuple(BM.ramp(np.array([100.0]), C.WATER_RAMP["light"])[0])      # lake inside land = water
+    assert tuple(rgb[2]) == tuple(BM.ramp(np.array([2000.0]), C.WATER_RAMP["light"])[0])
+    half = BM.colorize(dem[:, :1], np.array([[0.5]], np.float32), np.array([[False]]), depth[:, :1], "light")[0, 0]
+    assert half.min() > 0 and not (tuple(half) == tuple(rgb[0]))                                # coast pixel is a blend
+
+
+def test_land_and_water_ramps_do_not_share_hues_at_the_shore():
+    for t in ("light", "dark"):
+        land0, water0 = BM.ramp(np.array([0.0]), C.LAND_RAMP[t])[0], BM.ramp(np.array([0.0]), C.WATER_RAMP[t])[0]
+        assert int(np.abs(land0.astype(int) - water0.astype(int)).sum()) > 40                   # shoreline stays visible
+
+
+def test_build_with_base_map_writes_images_and_meta(tmp_path):
+    grid, projected = make_grid(box_polys(), 20_000)
+    bgrid = geo.LccGrid.from_extent(-2_500_000, -2_000_000, 2_500_000, 1_500_000, 50_000)
+    bdem = np.where(np.add.outer(np.arange(bgrid.ny), np.arange(bgrid.nx)) % 9 < 5, 300.0, -600.0).astype(np.float32)
+    lake = [np.array([[-98.0, 40.0], [-96.0, 40.0], [-96.0, 41.5], [-98.0, 41.5], [-98.0, 40.0]])]
+    world = [np.array([[-130.0, 20.0], [-60.0, 20.0], [-60.0, 55.0], [-130.0, 55.0], [-130.0, 20.0]])]
+    st = _stations(300)
+    st["prob"] = np.clip(16 * (st.lat - 36.0), 0, 100).round()                 # the south of the box is ~0 %
+    meta = build(st, box_polys(), tmp_path, grid=grid, dem=_fake_dem(grid), synthetic=True,
+                 base_inputs={"land": [world], "lakes": [lake], "dem": bdem, "grid": bgrid})
+    b = meta["base"]
+    for f in (b["light"], b["dark"], b["relief"]):
+        assert Image.open(tmp_path / f).size == (bgrid.nx, bgrid.ny), f
+    assert b["grid"]["res"] == 50_000 and set(b["ramps"]) == {"light", "dark"} and meta["surface"]["transparent_below"] == 5.0
+    ov = np.asarray(Image.open(tmp_path / "overlay.png"))
+    vals = np.frombuffer(gzip.decompress((tmp_path / "values.bin.gz").read_bytes()), np.uint8).reshape(grid.ny, grid.nx)
+    low = (vals < 5)
+    assert low.any() and (ov[..., 3][low] == 0).all()                           # nothing painted where the chance is < 5 %
+    assert (ov[..., 3][(vals >= 5) & (vals < 255)] > 0).mean() > 0.95
+
+
+def test_build_without_base_removes_stale_base_files(tmp_path):
+    for f in ("base_light.webp", "base_dark.webp", "relief_ext.webp"):
+        (tmp_path / f).write_bytes(b"x")
+    meta = build(_stations(), box_polys(), tmp_path, res=20_000, use_terrain=False)
+    assert meta["base"] is None and not (tmp_path / "base_light.webp").exists()

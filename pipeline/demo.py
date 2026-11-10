@@ -76,3 +76,13 @@ def make_demo_stations(polygons: list[Polygon], grid: LccGrid, dem: np.ndarray,
         "state": "", "lat": np.round(lat, 4), "lon": np.round(lon, 4),
         "elev_m": np.round(elev, 1), "prob": prob, "years": 30,
     })
+
+
+def synthetic_base_dem(grid: LccGrid, land_polys) -> np.ndarray:
+    """SYNTHETIC elevation for the base map: invented terrain on land, sloping sea floor offshore."""
+    from scipy.ndimage import gaussian_filter
+    from .boundary import Polygon  # noqa: F401  (type only)
+    land = rasterize_mask(grid, project_polygons(land_polys), supersample=1)
+    dem = synthetic_dem(grid, seed=11)
+    sea = -50.0 - 4500.0 * np.clip(1.0 - gaussian_filter(land, 12.0) * 2.2, 0, 1)
+    return np.where(land > 0.5, np.maximum(dem, 5.0), sea).astype(np.float32)

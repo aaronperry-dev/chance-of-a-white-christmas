@@ -26,8 +26,9 @@ import pandas as pd
 
 from . import config as C
 from . import dem as demmod
-from .boundary import load_conus_polygons
+from .boundary import load_conus_polygons, load_lake_polygons, load_land_polygons
 from .fetch import FetchError, ensure_file
+from . import basemap
 from .geo import LccGrid, lonlat_to_xy
 from .grid import classify, polygon_extent, project_polygons, rasterize_mask
 from .interp import Estimator, interpolate_grid, loo_cv
@@ -64,7 +65,7 @@ def _station_pixels(st: pd.DataFrame, grid: LccGrid):
 
 
 def build(stations: pd.DataFrame, polygons, out_dir: Path, *, res: float = C.GRID_RES_M, dem: np.ndarray | None = None,
-          grid: LccGrid | None = None, dem_label: str = "", use_terrain: bool = True, dem_zoom: int = C.DEM_ZOOM,
+          grid: LccGrid | None = None, dem_label: str = "", use_terrain: bool = True, dem_zoom: int = C.DEM_ZOOM, base_inputs: dict | None = None,
           synthetic: bool = False, source: dict | None = None) -> dict:
     """Build every data asset. ``dem`` (ny, nx) is fetched from AWS when omitted and ``use_terrain`` is set."""
     out_dir = Path(out_dir)
@@ -115,13 +116,23 @@ def build(stations: pd.DataFrame, polygons, out_dir: Path, *, res: float = C.GRI
     cv["chosen"] = method
 
     cls = classify(values)
-    render_overlay(cls, coverage, C.NOAA_COLORS, out_dir / "overlay.png")
+    render_overlay(cls, coverage, C.NOAA_COLORS, out_dir / "overlay.png", values=values,
+                   transparent_below=C.TRANSPARENT_BELOW_PCT)
     write_value_grid(values, coverage, out_dir / "values.bin.gz")
     has_relief = dem is not None
     if has_relief:
         render_relief(demmod.hillshade(dem, grid.res), coverage, out_dir / "relief.webp")
     else:
         (out_dir / "relief.webp").unlink(missing_ok=True)
+
+    base_meta = None
+    if base_inputs:
+        base_meta = basemap.build_base(base_inputs["land"], base_inputs.get("lakes") or [], projected, out_dir,
+                                       C.RAW_DIR / C.TERRAIN_CACHE, dem=base_inputs.get("dem"),
+                                       grid=base_inputs.get("grid"), zoom=base_inputs.get("zoom", C.BASE_DEM_ZOOM))
+    else:
+        for f in ("base_light.webp", "base_dark.webp", "relief_ext.webp"):
+            (out_dir / f).unlink(missing_ok=True)
 
     recs = [{"id": r.id, "n": r.name, "s": r.state, "la": round(r.lat, 4), "lo": round(r.lon, 4),
              "e": None if pd.isna(r.elev_m) else round(float(r.elev_m)), "p": int(round(r.prob)),
@@ -148,7 +159,9 @@ def build(stations: pd.DataFrame, polygons, out_dir: Path, *, res: float = C.GRI
         "grid": grid.as_meta(),
         "surface": {"overlay": "overlay.png", "relief": "relief.webp" if has_relief else None,
                     "values": "values.bin.gz", "nodata": 255, "method": method,
+                    "transparent_below": C.TRANSPARENT_BELOW_PCT,
                     "dem": dem_label if has_relief else "", "cv": cv},
+        "base": base_meta,
         "tiles": {
             "url": C.TILES_URL, "service": C.TILES_SERVICE_PAGE, "size": C.TILE_SIZE,
             "origin": list(C.TILE_ORIGIN), "resolutions": C.TILE_RESOLUTIONS,
@@ -190,6 +203,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-overlays", action="store_true", help="skip the Natural Earth state-line / label overlays")
     ap.add_argument("--res", type=float, default=C.GRID_RES_M, help="grid cell size in metres (default %(default)s)")
     ap.add_argument("--dem-zoom", type=int, default=C.DEM_ZOOM, help="AWS terrain tile zoom (7 ~ 1 km, 8 ~ 0.5 km)")
+    ap.add_argument("--no-base", action="store_true", help="skip the land / bathymetry base map")
     ap.add_argument("--no-terrain", action="store_true", help="skip the AWS terrain download: plain IDW surface, no relief")
     ap.add_argument("--demo", action="store_true",
                     help="SYNTHETIC stations and terrain (layout testing only; page shows a banner)")
@@ -232,8 +246,21 @@ def main(argv: list[str] | None = None) -> int:
                                  f"  NCEI spreadsheet:   {exc}") from exc
             source = {"name": "NOAA NCEI station spreadsheet", "url": C.STATIONS_URL, "file": Path(path).name}
 
+    base_inputs = None
+    if not args.no_base and not args.no_terrain:
+        try:
+            land = load_land_polygons(ensure_file(C.COUNTRIES_URL, C.RAW_DIR / C.COUNTRIES_FILE, min_bytes=10_000))
+            lakes = load_lake_polygons(ensure_file(C.LAKES_URL, C.RAW_DIR / C.LAKES_FILE, min_bytes=1_000))
+            base_inputs = {"land": land, "lakes": lakes, "zoom": min(C.BASE_DEM_ZOOM, args.dem_zoom)}
+            if args.demo:
+                from .demo import synthetic_base_dem
+                bg = basemap.base_grid()
+                base_inputs.update(grid=bg, dem=synthetic_base_dem(bg, land))
+        except (FetchError, OSError, ValueError) as exc:
+            log.warning("base map skipped (%s); the page falls back to a plain background", exc)
+
     meta = build(stations, polygons, args.out, res=args.res, dem=dem, grid=grid, dem_label=dem_label,
-                 use_terrain=not args.no_terrain, dem_zoom=args.dem_zoom, synthetic=args.demo, source=source)
+                 use_terrain=not args.no_terrain, dem_zoom=args.dem_zoom, base_inputs=base_inputs, synthetic=args.demo, source=source)
     if not args.no_overlays:
         _vectors(args.out)
 

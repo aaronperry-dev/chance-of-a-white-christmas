@@ -17,11 +17,18 @@ def _rgb(hex_color: str) -> tuple[int, int, int]:
     return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
 
 
-def render_overlay(cls: np.ndarray, coverage: np.ndarray, colors: list[str], path: Path) -> None:
-    """RGBA PNG: class colour, alpha = land coverage (anti-aliased coast)."""
+def render_overlay(cls: np.ndarray, coverage: np.ndarray, colors: list[str], path: Path,
+                   values: np.ndarray | None = None, transparent_below: float | None = None) -> None:
+    """RGBA PNG: class colour, alpha = land coverage (anti-aliased coast).
+
+    Cells whose value is below ``transparent_below`` get alpha 0 so the base map shows through.
+    """
     lut = np.array([_rgb(c) for c in colors], dtype=np.uint8)
     rgba = np.zeros(cls.shape + (4,), dtype=np.uint8)
     ok = cls >= 0
+    if values is not None and transparent_below is not None:
+        with np.errstate(invalid="ignore"):
+            ok &= ~(values < transparent_below)
     rgba[ok, :3] = lut[cls[ok]]
     rgba[ok, 3] = np.round(np.clip(coverage[ok], 0, 1) * 255).astype(np.uint8)
     Image.fromarray(rgba, "RGBA").save(path, optimize=True)

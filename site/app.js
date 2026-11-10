@@ -117,7 +117,7 @@
 
   /* ---------- panes ---------- */
   const pane = (name, z) => { const p = map.createPane(name); p.style.zIndex = z; return p; };
-  pane('ctx', 210); pane('surface', 250); pane('relief', 260); pane('ref', 270); pane('lines', 400); pane('stations', 500);
+  pane('base', 205); pane('ctx', 210); pane('surface', 250); pane('relief', 260); pane('ref', 270); pane('lines', 400); pane('stations', 500);
   pane('labels', 650).style.pointerEvents = 'none';
 
   /* ---------- our surface: images positioned in LCC metres ----------
@@ -125,7 +125,8 @@
    * projection, not in lat/lon; so it is positioned from its projected corners at every zoom. */
   const G = meta.grid;
   const GridImage = L.Layer.extend({
-    initialize(url, paneName) { this._url = url; this.options = { pane: paneName }; },
+    initialize(url, paneName, grid) { this._url = url; this._g = grid || G; this.options = { pane: paneName }; },
+    setUrl(url) { if (url !== this._url) { this._url = url; if (this._img) this._img.src = url; } },
     onAdd() {
       if (!this._img) {
         const im = L.DomUtil.create('img', 'wc-img' + (this._map._zoomAnimated ? ' leaflet-zoom-animated' : ''));
@@ -140,17 +141,24 @@
     _corner(x, y, z, origin) { return crs.transformation.transform(L.point(x, y), crs.scale(z))._subtract(origin); },
     _reset() {
       const z = this._map.getZoom(), o = this._map.getPixelOrigin();
-      const a = this._corner(G.x0, G.y1, z, o), b = this._corner(G.x1, G.y0, z, o);
+      const g = this._g, a = this._corner(g.x0, g.y1, z, o), b = this._corner(g.x1, g.y0, z, o);
       L.DomUtil.setPosition(this._img, a);
       this._img.style.width = (b.x - a.x) + 'px'; this._img.style.height = (b.y - a.y) + 'px';
     },
     _anim(e) {
       const o = this._map._getNewPixelOrigin(e.center, e.zoom);
-      L.DomUtil.setTransform(this._img, this._corner(G.x0, G.y1, e.zoom, o), this._map.getZoomScale(e.zoom));
+      L.DomUtil.setTransform(this._img, this._corner(this._g.x0, this._g.y1, e.zoom, o), this._map.getZoomScale(e.zoom));
     },
   });
   const surfaceLayer = new GridImage('data/' + SURF.overlay, 'surface').addTo(map);
-  const reliefLayer = SURF.relief ? new GridImage('data/' + SURF.relief, 'relief').addTo(map) : null;
+  /* terrain shading: the 1 km US layer, plus (when there is a base map) a coarser one for the rest of the view */
+  const reliefLayers = [];
+  if (SURF.relief) reliefLayers.push(new GridImage('data/' + SURF.relief, 'relief'));
+  const BASE = meta.base;
+  const baseLayer = BASE ? new GridImage('data/' + BASE[theme], 'base', BASE.grid).addTo(map) : null;
+  if (BASE && BASE.relief) reliefLayers.push(new GridImage('data/' + BASE.relief, 'relief', BASE.grid));
+  reliefLayers.forEach((l) => l.addTo(map));
+  const reliefLayer = reliefLayers.length ? reliefLayers : null;
   const ctxLayer = ctxGJ ? L.geoJSON(ctxGJ, { renderer: L.svg({ pane: 'ctx' }), interactive: false }).addTo(map) : null;
 
   /* ---------- NOAA tiles (optional reference layer) ---------- */
@@ -214,6 +222,15 @@
     options: { position: 'bottomleft' },
     onAdd() { legendEl = el('div', 'legend'); L.DomEvent.disableClickPropagation(legendEl); renderLegend(); return legendEl; },
   });
+  const ramp = (title, stops, unit, endLabel) => {
+    const max = stops[stops.length - 1][0], row = el('div', 'ramp');
+    const bar = el('div', 'ramp-bar');
+    bar.style.background = 'linear-gradient(to right,' + stops.map((st) => st[1] + ' ' + (100 * st[0] / max).toFixed(1) + '%').join(',') + ')';
+    const ends = el('div', 'ramp-ends');
+    ends.append(el('span', null, '0'), el('span', null, max.toLocaleString('en-US') + (endLabel || '') + ' ' + unit));
+    row.append(el('div', 'ramp-t', title), bar, ends);
+    return row;
+  };
   function renderLegend() {
     if (!legendEl) return;
     legendEl.replaceChildren(el('div', 't', 'Chance of ≥1 in. snow on the ground, Dec 25'));
@@ -223,6 +240,11 @@
       ticks.append(el('span', null, i < classes.length - 1 ? String(c.hi) : ''));
     });
     legendEl.append(bar, ticks);
+    if (SURF.transparent_below) legendEl.append(el('div', 'ramp-note', 'Below ' + SURF.transparent_below + '%: no colour, terrain shows'));
+    if (BASE) {
+      const r = BASE.ramps[theme];
+      legendEl.append(ramp('Land elevation', r.land, 'm', '+'), ramp('Ocean and lake depth', r.water, 'm', '+'));
+    }
   }
   new Legend().addTo(map);
 
@@ -383,7 +405,10 @@
     root.dataset.theme = theme;
     document.querySelectorAll('[data-theme-set]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.themeSet === theme)));
     if (lineLayer) lineLayer.setStyle({ stroke: true, color: css('--border'), weight: 0.9, fill: false, lineJoin: 'round' });
-    if (ctxLayer) ctxLayer.setStyle({ stroke: true, color: css('--ctx-line'), weight: 0.6, fill: true, fillColor: css('--ctx'), fillOpacity: 1 });
+    if (baseLayer) baseLayer.setUrl('data/' + BASE[theme]);
+    // with a base map the countries are only outlines; without one they are the flat grey context fill
+    if (ctxLayer) ctxLayer.setStyle(BASE ? { stroke: true, color: css('--ctx-line'), weight: 0.8, fill: false }
+      : { stroke: true, color: css('--ctx-line'), weight: 0.6, fill: true, fillColor: css('--ctx'), fillOpacity: 1 });
     stationMarkers.forEach((m, i) => m.setStyle({ fillColor: colorOf(stations[i].p), color: css('--ring') }));
     renderLegend(); renderClasses();
     rerenderLast();
@@ -441,7 +466,7 @@
   if (reliefLayer) {
     const setRelief = () => {
       const on = reliefBox.checked;
-      on ? reliefLayer.addTo(map) : reliefLayer.remove();
+      reliefLayer.forEach((l) => (on ? l.addTo(map) : l.remove()));
       reliefRange.disabled = !on;
       map.getPane('relief').style.opacity = String(reliefRange.value / 100);
     };
