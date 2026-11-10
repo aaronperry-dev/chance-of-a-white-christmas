@@ -18,6 +18,7 @@ import csv
 import datetime as dt
 import json
 import logging
+import shutil
 import sys
 from pathlib import Path
 
@@ -31,6 +32,7 @@ from .fetch import FetchError, ensure_file
 from . import basemap
 from .geo import LccGrid, lonlat_to_xy
 from . import cartography as cart
+from . import tiles as tilemod
 from .grid import classify, polygon_extent, project_polygons, rasterize_mask
 from .interp import Estimator, choose_k, interpolate_grid, loo_cv
 from .render import area_stats, render_overlay, render_relief, write_value_grid
@@ -81,9 +83,30 @@ def _write_overlay(values: np.ndarray, dem: np.ndarray | None, grid: LccGrid, pr
     render_overlay(np.where(clear, 0, code).astype(np.int8), cov, C.NOAA_COLORS, path, transparent=clear)
 
 
+def _write_pyramids(out_dir: Path, grid: LccGrid, has_relief: bool, base_meta: dict | None) -> dict:
+    """Tile pyramids for every map image (see tiles.py); returns the page's description of them."""
+    ext = (grid.x0, grid.y0, grid.x1, grid.y1)
+    out = {"overlay": tilemod.write_pyramid(out_dir / "overlay.png", ext, out_dir, "overlay", fmt="webp", lossless=True)}
+    if has_relief:
+        out["relief"] = tilemod.write_pyramid(out_dir / "relief.webp", ext, out_dir, "relief", quality=80)
+    if base_meta:
+        g = base_meta["grid"]
+        bext = (g["x0"], g["y0"], g["x1"], g["y1"])
+        for key in ("light", "dark"):
+            out["base_" + key] = tilemod.write_pyramid(out_dir / base_meta[key], bext, out_dir, "base_" + key, quality=86)
+        if base_meta.get("relief"):
+            out["relief_ext"] = tilemod.write_pyramid(out_dir / base_meta["relief"], bext, out_dir, "relief_ext", quality=80)
+    else:
+        for n in ("base_light", "base_dark", "relief_ext"):
+            shutil.rmtree(out_dir / "tiles" / n, ignore_errors=True)
+    if not has_relief:
+        shutil.rmtree(out_dir / "tiles" / "relief", ignore_errors=True)
+    return out
+
+
 def build(stations: pd.DataFrame, polygons, out_dir: Path, *, res: float = C.GRID_RES_M, dem: np.ndarray | None = None,
           grid: LccGrid | None = None, dem_label: str = "", use_terrain: bool = True, dem_zoom: int = C.DEM_ZOOM, base_inputs: dict | None = None,
-          synthetic: bool = False, source: dict | None = None) -> dict:
+          synthetic: bool = False, source: dict | None = None, keep_sources: bool = True) -> dict:
     """Build every data asset. ``dem`` (ny, nx) is fetched from AWS when omitted and ``use_terrain`` is set."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -150,6 +173,11 @@ def build(stations: pd.DataFrame, polygons, out_dir: Path, *, res: float = C.GRI
         for f in ("base_light.webp", "base_dark.webp", "relief_ext.webp"):
             (out_dir / f).unlink(missing_ok=True)
 
+    pyramids = _write_pyramids(out_dir, grid, has_relief, base_meta)
+    if not keep_sources:                      # the whole-image files are only inputs to the tiles; do not publish them
+        for f in ("overlay.png", "relief.webp", "base_light.webp", "base_dark.webp", "relief_ext.webp"):
+            (out_dir / f).unlink(missing_ok=True)
+
     recs = [{"id": r.id, "n": r.name, "s": r.state, "la": round(r.lat, 4), "lo": round(r.lon, 4),
              "e": None if pd.isna(r.elev_m) else round(float(r.elev_m) * C.M_TO_FT), "p": int(round(r.prob)),
              "y": None if pd.isna(getattr(r, "years", np.nan)) else int(r.years)}
@@ -174,6 +202,8 @@ def build(stations: pd.DataFrame, polygons, out_dir: Path, *, res: float = C.GRI
         "crs": {"name": C.LCC_NAME, "proj4": C.LCC_PROJ, "extent": list(C.NOAA_EXTENT)},
         "grid": grid.as_meta(),
         "conus_extent": [round(v, 1) for v in polygon_extent(projected)],
+        "pyramids": pyramids,
+        "likelihood": [{"hi": hi, "label": lab} for hi, lab in C.LIKELIHOOD],
         "surface": {"overlay": "overlay.png", "overlay_scale": C.OVERLAY_SCALE, "relief": "relief.webp" if has_relief else None,
                     "values": "values.bin.gz", "nodata": 255, "method": method,
                     "transparent_at_or_below": C.TRANSPARENT_AT_OR_BELOW_PCT,
@@ -222,6 +252,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--dem-zoom", type=int, default=C.DEM_ZOOM, help="AWS terrain tile zoom (7 ~ 1 km, 8 ~ 0.5 km)")
     ap.add_argument("--no-base", action="store_true", help="skip the land / bathymetry base map")
     ap.add_argument("--no-terrain", action="store_true", help="skip the AWS terrain download: plain IDW surface, no relief")
+    ap.add_argument("--keep-sources", action="store_true", help="also keep the whole-image overlay/relief/base files next to the tiles")
     ap.add_argument("--demo", action="store_true",
                     help="SYNTHETIC stations and terrain (layout testing only; page shows a banner)")
     args = ap.parse_args(argv)
@@ -277,7 +308,8 @@ def main(argv: list[str] | None = None) -> int:
             log.warning("base map skipped (%s); the page falls back to a plain background", exc)
 
     meta = build(stations, polygons, args.out, res=args.res, dem=dem, grid=grid, dem_label=dem_label,
-                 use_terrain=not args.no_terrain, dem_zoom=args.dem_zoom, base_inputs=base_inputs, synthetic=args.demo, source=source)
+                 use_terrain=not args.no_terrain, dem_zoom=args.dem_zoom, base_inputs=base_inputs, synthetic=args.demo, source=source,
+                 keep_sources=args.keep_sources)
     if not args.no_overlays:
         _vectors(args.out)
 

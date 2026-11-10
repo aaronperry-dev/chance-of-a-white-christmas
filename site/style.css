@@ -146,7 +146,12 @@ h1 { margin: 0 0 4px; font-size: 28px; line-height: 1.2; letter-spacing: -0.01em
 .ht-top { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .ht-top .sw { width: 14px; height: 14px; align-self: center; }
 .ht-pct { font-size: 26px; line-height: 1; font-weight: 650; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
-.ht-kind { color: var(--ink-3); font-size: 12px; }
+.ht-lik { font-size: 11.5px; font-weight: 650; letter-spacing: .02em; padding: 2px 9px; border-radius: 999px; color: #fff; align-self: center; white-space: nowrap; }
+.ht-lik[data-level="0"] { background: #6b6b6b; }
+.ht-lik[data-level="1"] { background: #3d5a8c; }
+.ht-lik[data-level="2"] { background: #1d71d4; }
+.ht-lik[data-level="3"] { background: #0b4fa3; }
+.ht-kind { color: var(--ink-3); font-size: 12px; margin-top: 3px; }
 .ht-stn { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); display: grid; gap: 1px; }
 .ht-lbl { color: var(--ink-3); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; }
 .ht-stn b { font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }

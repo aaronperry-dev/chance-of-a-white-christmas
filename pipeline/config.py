@@ -135,10 +135,17 @@ IDW_EPS_M = 5000.0
 STATE_LINE_EPS_M = 100.0
 CONTEXT_LINE_EPS_M = 400.0
 
+# Map images are served as a tile pyramid on NOAA's tile grid (this many pixels per tile edge).
+WEB_TILE_PX = 512
+
 # --- Cartographic finishing ---------------------------------------------------
 OVERLAY_SCALE = 2                      # overlay PNG pixels per grid cell (class edges drawn from a bicubic upsample)
 MIN_REGION_KM2 = 150.0                 # smaller flat-terrain colour patches are merged into the surrounding class
 SIEVE_RELIEF_M = 120.0                 # ...but not where the DEM varies by more than this over ~5 km (real summits)
+
+# Plain-language likelihood shown in the hover card: (highest percent included, label). Edges follow NOAA's classes
+# (very unlikely = the lowest class, 10 % or less; likely = 51-90 %; very likely = above 90 %).
+LIKELIHOOD = [(10, "Very Unlikely"), (50, "Unlikely"), (90, "Likely"), (100, "Very Likely")]
 
 # --- Legend (NOAA's 8 classes) -------------------------------------------------
 # Labels and breaks follow NOAA's maps: 0-10, 11-25, 26-40, 41-50, 51-60, 61-75, 76-90, 91-100 %.

@@ -129,47 +129,37 @@
   /* ---------- our surface: images positioned in LCC metres ----------
    * An ordinary image overlay would be placed by lat/lon corners, but the grid is a rectangle in the
    * projection, not in lat/lon; so it is positioned from its projected corners at every zoom. */
+  /* Map images are tile pyramids on NOAA's tile grid (pipeline/tiles.py): only the visible tiles are loaded and drawn,
+   * which keeps zooming smooth. A tile that does not exist (fully transparent) is never requested. */
+  const PY = meta.pyramids || {};
   const G = meta.grid;
-  const GridImage = L.Layer.extend({
-    initialize(url, paneName, grid) { this._url = url; this._g = grid || G; this.options = { pane: paneName }; },
-    setUrl(url) { if (url !== this._url) { this._url = url; if (this._img) this._img.src = url; } },
-    onAdd() {
-      if (!this._img) {
-        const im = L.DomUtil.create('img', 'wc-img' + (this._map._zoomAnimated ? ' leaflet-zoom-animated' : ''));
-        im.alt = ''; im.decoding = 'async'; im.draggable = false; im.src = this._url;
-        this._img = im;
-      }
-      this.getPane().appendChild(this._img);
-      this._reset();
+  const urlOf = (n) => PY[n].url + (V ? '?v=' + V : '');
+  const PyrLayer = L.TileLayer.extend({
+    initialize(name, paneName) {
+      const d = PY[name];
+      this._have = new Set(d.have.map((t) => t.join(':')));
+      L.TileLayer.prototype.initialize.call(this, 'data/' + urlOf(name), {
+        pane: paneName, tileSize: d.size, minZoom: 0, maxZoom: resolutions.length - 1, maxNativeZoom: d.native_zoom,
+        noWrap: true, keepBuffer: 2, updateWhenZooming: false, updateInterval: 120, errorTileUrl: BLANK, className: 'wc-tile',
+      });
     },
-    onRemove() { this._img.remove(); },
-    getEvents() { const e = { zoom: this._reset, viewreset: this._reset }; if (this._map._zoomAnimated) e.zoomanim = this._anim; return e; },
-    _corner(x, y, z, origin) { return crs.transformation.transform(L.point(x, y), crs.scale(z))._subtract(origin); },
-    _reset() {
-      const z = this._map.getZoom(), o = this._map.getPixelOrigin();
-      const g = this._g, a = this._corner(g.x0, g.y1, z, o), b = this._corner(g.x1, g.y0, z, o);
-      L.DomUtil.setPosition(this._img, a);
-      this._img.style.width = (b.x - a.x) + 'px'; this._img.style.height = (b.y - a.y) + 'px';
-    },
-    _anim(e) {
-      const o = this._map._getNewPixelOrigin(e.center, e.zoom);
-      L.DomUtil.setTransform(this._img, this._corner(this._g.x0, this._g.y1, e.zoom, o), this._map.getZoomScale(e.zoom));
-    },
+    _isValidTile(c) { return this._have.has(c.z + ':' + c.x + ':' + c.y); },
+    useTemplate(name) { this.setUrl('data/' + urlOf(name)); },
   });
-  const surfaceLayer = new GridImage(data(SURF.overlay), 'surface').addTo(map);
+  const BLANK = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
+  const surfaceLayer = new PyrLayer('overlay', 'surface').addTo(map);
   /* terrain shading: the 1 km US layer, plus (when there is a base map) a coarser one for the rest of the view */
   const reliefLayers = [];
-  if (SURF.relief) reliefLayers.push(new GridImage(data(SURF.relief), 'relief'));
+  if (PY.relief) reliefLayers.push(new PyrLayer('relief', 'relief'));
   const BASE = meta.base;
-  const baseLayer = BASE ? new GridImage(data(BASE[theme]), 'base', BASE.grid).addTo(map) : null;
-  if (BASE && BASE.relief) reliefLayers.push(new GridImage(data(BASE.relief), 'relief', BASE.grid));
+  const baseLayer = BASE && PY['base_' + theme] ? new PyrLayer('base_' + theme, 'base').addTo(map) : null;
+  if (BASE && PY.relief_ext) reliefLayers.push(new PyrLayer('relief_ext', 'relief'));
   reliefLayers.forEach((l) => l.addTo(map));
   const reliefLayer = reliefLayers.length ? reliefLayers : null;
   const ctxLayer = ctxGJ ? L.geoJSON(ctxGJ, { renderer: L.svg({ pane: 'ctx' }), interactive: false }).addTo(map) : null;
 
   /* ---------- NOAA tiles (optional reference layer) ---------- */
   const [fx0, fy0, fx1, fy1] = T.full_extent, ZOFF = -1;
-  const BLANK = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
   const NoaaTiles = L.TileLayer.extend({
     // only request tiles that exist in the service's cache (its full extent), so no 404 storm
     _isValidTile(c) {
@@ -359,9 +349,11 @@
    * A plain element (not a Leaflet tooltip) so it tracks the mouse smoothly and also over station dots.
    * Listens on the container's DOM events; positions are throttled to one update per frame. */
   const hover = el('div', 'hover-tip'); hover.hidden = true; hover.setAttribute('aria-hidden', 'true');
-  const hvTop = el('div', 'ht-top'), hvSw = el('span', 'sw'), hvPct = el('span', 'ht-pct'), hvKind = el('span', 'ht-kind');
+  const hvTop = el('div', 'ht-top'), hvSw = el('span', 'sw'), hvPct = el('span', 'ht-pct'), hvLik = el('span', 'ht-lik'), hvKind = el('div', 'ht-kind');
   const hvStn = el('div', 'ht-stn');
-  hvTop.append(hvSw, hvPct, hvKind); hover.append(hvTop, hvStn);
+  hvTop.append(hvSw, hvPct, hvLik); hover.append(hvTop, hvKind, hvStn);
+  const LIK = meta.likelihood || [{ hi: 10, label: 'Very Unlikely' }, { hi: 50, label: 'Unlikely' }, { hi: 90, label: 'Likely' }, { hi: 100, label: 'Very Likely' }];
+  const likelihood = (p) => (LIK.find((t) => p <= t.hi) || LIK[LIK.length - 1]);
   map.getContainer().appendChild(hover);
   let hoverOn = true, hoverBusy = false, hoverEv = null, panning = false;
   const hideHover = () => { hover.hidden = true; };
@@ -377,6 +369,8 @@
     const p = v === undefined ? n.s.p : v;                           // value grid not loaded yet: station value
     hvSw.style.background = colorOf(p);
     hvPct.textContent = p + '%';
+    const lk = likelihood(p), li = LIK.indexOf(lk);
+    hvLik.textContent = lk.label; hvLik.dataset.level = String(li);
     hvKind.textContent = (v === undefined ? 'station value' : 'chance of a white Christmas') + (meta.synthetic ? ' · demo data' : '');
     hvStn.replaceChildren(el('span', 'ht-lbl', 'Nearest station'), el('b', null, stationName(n.s)),
       el('span', 'ht-sub', n.mi < 1 ? 'less than 1 mi away · station value ' + n.s.p + '%' : n.mi.toFixed(0) + ' mi away · station value ' + n.s.p + '%'));
@@ -398,7 +392,7 @@
     root.dataset.theme = theme;
     document.querySelectorAll('[data-theme-set]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.themeSet === theme)));
     if (lineLayer) lineLayer.setStyle({ stroke: true, color: css('--border'), weight: 0.9, fill: false, lineJoin: 'round' });
-    if (baseLayer) baseLayer.setUrl(data(BASE[theme]));
+    if (baseLayer && PY['base_' + theme]) baseLayer.useTemplate('base_' + theme);
     // with a base map the countries are only outlines; without one they are the flat grey context fill
     if (ctxLayer) ctxLayer.setStyle(BASE ? { stroke: true, color: css('--ctx-line'), weight: 0.8, fill: false }
       : { stroke: true, color: css('--ctx-line'), weight: 0.6, fill: true, fillColor: css('--ctx'), fillOpacity: 1 });

@@ -514,3 +514,50 @@ def test_overlay_has_no_tiny_patches_in_flat_terrain(tmp_path):
         edge = ndimage.binary_dilation(ov[..., 3] == 0, iterations=2)                    # patches cut by the coast may be small
         small = [i + 1 for i, sz in enumerate(sizes) if sz < min_px and not edge[lab == i + 1].any()]
         assert not small, (k, len(small))
+
+
+# ============================================================ tile pyramid
+from pipeline import tiles as TL  # noqa: E402
+
+
+def test_pyramid_tiles_line_up_with_the_noaa_tile_grid(tmp_path):
+    ox, oy = C.TILE_ORIGIN
+    res = TL.zoom_resolutions()
+    z = 4
+    span = res[z] * C.WEB_TILE_PX
+    # a 3 x 2 tile block, 1 px per 1/256 of a tile, with one red pixel at a known map position
+    x0, y1 = ox + 20 * span, oy - 30 * span
+    w, h = 3 * C.WEB_TILE_PX, 2 * C.WEB_TILE_PX
+    img = Image.new("RGBA", (w, h), (0, 0, 255, 255))
+    px, py = 700, 300                                          # pixel in the source
+    img.putpixel((px, py), (255, 0, 0, 255))
+    px_m = res[z]
+    info = TL.write_pyramid(img, (x0, y1 - h * px_m, x0 + w * px_m, y1), tmp_path, "t", fmt="png", max_zoom=z)
+    assert info["native_zoom"] == z and info["size"] == C.WEB_TILE_PX and info["url"].endswith("{z}/{x}/{y}.png")
+    assert [z, 21, 30] in info["have"] and len(info["have"]) >= 6      # the source tiles, at this zoom
+    tile = np.asarray(Image.open(tmp_path / "tiles" / "t" / str(z) / "21" / "30.png"))
+    ty_, tx_ = py - 0, px - C.WEB_TILE_PX                                   # tile (21, 30) holds source x 512..1023, y 0..511
+    r_, g_, b_ = (int(v) for v in tile[ty_, tx_][:3])
+    assert r_ > 235 and g_ < 20 and b_ < 20                                  # the marker pixel lands on the same pixel
+    # lower zooms exist too and shrink the area into fewer tiles
+    assert any(t[0] == 0 for t in info["have"]) and sum(t[0] == 0 for t in info["have"]) <= sum(t[0] == z for t in info["have"])
+
+
+def test_transparent_tiles_are_not_written(tmp_path):
+    ox, oy = C.TILE_ORIGIN
+    res = TL.zoom_resolutions()
+    span = res[3] * C.WEB_TILE_PX
+    img = Image.new("RGBA", (2 * C.WEB_TILE_PX, C.WEB_TILE_PX), (0, 0, 0, 0))
+    img.paste((10, 20, 30, 255), (C.WEB_TILE_PX, 0, 2 * C.WEB_TILE_PX, C.WEB_TILE_PX))     # right half only
+    info = TL.write_pyramid(img, (ox + 5 * span, oy - 7 * span - span, ox + 7 * span, oy - 7 * span), tmp_path, "t", fmt="png", max_zoom=3)
+    assert [3, 6, 7] in info["have"] and [3, 5, 7] not in info["have"]
+
+
+def test_build_publishes_tiles_and_likelihood_and_can_drop_sources(tmp_path):
+    grid, _ = make_grid(box_polys(), 15_000)
+    meta = build(_stations(), box_polys(), tmp_path, grid=grid, dem=_fake_dem(grid), synthetic=True, keep_sources=False)
+    assert set(meta["pyramids"]) >= {"overlay", "relief"} and meta["pyramids"]["overlay"]["have"]
+    z, x, y = meta["pyramids"]["overlay"]["have"][0]
+    assert (tmp_path / "tiles" / "overlay" / str(z) / str(x) / f"{y}.webp").stat().st_size > 0
+    assert not (tmp_path / "overlay.png").exists() and not (tmp_path / "relief.webp").exists()
+    assert [t["label"] for t in meta["likelihood"]] == ["Very Unlikely", "Unlikely", "Likely", "Very Likely"]
