@@ -17,6 +17,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -30,12 +31,14 @@ jobs:
       - name: Unit tests
         run: python -m pytest -q
 
-      # The inputs only change when NOAA issues new Normals (next: ~2031), so cache them.
+      # The inputs only change when NOAA issues new Normals (next: ~2031), so cache them
+      # (station JSON, boundaries).
       - name: Cache downloaded inputs
         uses: actions/cache@v4
         with:
           path: data/raw
           key: raw-${{ hashFiles('pipeline/config.py') }}
+          restore-keys: raw-
 
       - name: Build map layer and data files
         run: python -m pipeline.build

@@ -5,7 +5,7 @@ so columns are located by header text rather than by position. If the
 probability column cannot be identified unambiguously the loader stops and
 lists the candidates instead of guessing: pass ``--prob-col "<header>"``.
 
-Output columns: id, name, state, lat, lon, elev, prob   (prob in percent, 0-100)
+Output columns: id, name, state, lat, lon, elev_m, prob   (prob in percent, 0-100)
 """
 from __future__ import annotations
 
@@ -29,6 +29,21 @@ _ELEV = re.compile(r"elev", re.I)
 _STATE = re.compile(r"^\s*(state|st)\b", re.I)
 _ID = re.compile(r"(station.?id|\bid\b|ghcn|coop|wban|\bstn\b)", re.I)
 _NAME = re.compile(r"(station.?name|^\s*name\s*$|^\s*station\s*$|location)", re.I)
+
+
+_OLE_MAGIC = b"\xd0\xcf\x11\xe0"          # legacy .xls
+_ZIP_MAGIC = b"PK\x03\x04"                  # .xlsx / .xlsm
+
+
+def check_is_workbook(path: Path) -> None:
+    """Raise FetchError unless ``path`` really is an Excel workbook (not e.g. an HTML page)."""
+    from .fetch import FetchError
+    with open(path, "rb") as fh:
+        head = fh.read(512)
+    if head.startswith((_ZIP_MAGIC, _OLE_MAGIC)):
+        return
+    kind = "an HTML page" if head.lstrip()[:1] == b"<" else "not an Excel workbook"
+    raise FetchError(f"{Path(path).name} is {kind} (starts with {head[:60]!r})")
 
 
 def _read_sheets(path: Path) -> dict[str, pd.DataFrame]:
@@ -105,6 +120,15 @@ def _pick_prob_col(cols: list[str], numeric_ok: set[str], override: str | None) 
     return good[0][1]
 
 
+def _elev_factor(header: str) -> float:
+    """Metres per unit for an elevation column; unlabeled columns are assumed metres."""
+    if re.search(r"\bft\b|feet|foot", header, re.I):
+        return 0.3048
+    if not re.search(r"\bm\b|meter|metre", header, re.I):
+        log.warning("elevation column %r has no unit in its header; assuming metres", header)
+    return 1.0
+
+
 def _to_num(s: pd.Series) -> pd.Series:
     if s.dtype == object:
         s = s.astype(str).str.replace("%", "", regex=False).str.strip()
@@ -113,6 +137,11 @@ def _to_num(s: pd.Series) -> pd.Series:
 
 def load_stations(path: Path, prob_col: str | None = None) -> pd.DataFrame:
     path = Path(path)
+    if path.suffix.lower() in {".xlsx", ".xlsm", ".xls"}:
+        try:
+            check_is_workbook(path)
+        except RuntimeError as exc:                     # FetchError
+            raise StationFormatError(str(exc)) from exc
     tables = [t for t in (_table_from_sheet(r) for r in _read_sheets(path).values()) if t is not None]
     if not tables:
         raise StationFormatError(f"No sheet in {path.name} has latitude/longitude headers.")
@@ -141,7 +170,7 @@ def load_stations(path: Path, prob_col: str | None = None) -> pd.DataFrame:
         "state": df[state_c].astype(str).str.strip() if state_c else "",
         "lat": _to_num(df[lat_c]),
         "lon": _to_num(df[lon_c]),
-        "elev": _to_num(df[elev_c]) if elev_c else np.nan,
+        "elev_m": _to_num(df[elev_c]) * _elev_factor(elev_c) if elev_c else np.nan,
         "prob": _to_num(df[pcol]),
     })
 

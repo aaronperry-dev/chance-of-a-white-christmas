@@ -1,21 +1,36 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Probability of a White Christmas · CONUS</title>
-<meta name="description" content="Historical probability of at least 1 inch of snow on the ground on December 25 across the contiguous U.S., from NOAA NCEI 1991–2020 Climate Normals.">
+<meta name="description" content="Historical probability of at least 1 inch of snow on the ground on December 25 across the contiguous U.S., from NOAA NCEI 1991–2020 Climate Normals, in NOAA's Lambert Conformal Conic projection.">
+<script>
+  /* Set the theme before first paint (saved choice, else the OS preference). */
+  (function () {
+    var t = null;
+    try { t = localStorage.getItem('wc-theme'); } catch (e) {}
+    if (t !== 'light' && t !== 'dark') t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    document.documentElement.dataset.theme = t;
+  })();
+</script>
 <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <div id="demo-banner" class="banner" role="note" hidden>
-  <span aria-hidden="true">⚠</span> <strong>DEMO DATA</strong> — synthetic values for layout testing. This is not NOAA data.
+  <span aria-hidden="true">⚠</span> <strong>DEMO DATA</strong> — synthetic stations for layout testing. This is not NOAA data.
 </div>
 
-<header class="page">
-  <h1>Probability of a White Christmas</h1>
-  <p class="sub">Historical chance of at least <strong>1&nbsp;inch of snow on the ground</strong> on December&nbsp;25 across the contiguous U.S. · <span id="period">1991–2020 U.S. Climate Normals</span></p>
+<header class="page head">
+  <div>
+    <h1>Probability of a White Christmas</h1>
+    <p class="sub">Historical chance of at least <strong>1&nbsp;inch of snow on the ground</strong> on December&nbsp;25 across the contiguous U.S. · <span id="period">1991–2020 U.S. Climate Normals</span></p>
+  </div>
+  <div class="theme" role="group" aria-label="Colour theme">
+    <button type="button" data-theme-set="light" aria-pressed="false"><span aria-hidden="true">☀</span> Light</button>
+    <button type="button" data-theme-set="dark" aria-pressed="true"><span aria-hidden="true">☾</span> Dark</button>
+  </div>
 </header>
 
 <section class="kpis" aria-label="Headline figures">
@@ -34,11 +49,9 @@
 </section>
 
 <section class="toolbar" aria-label="Map controls">
-  <label class="chk"><input type="checkbox" id="t-surface" checked> Probability surface</label>
+  <label class="chk"><input type="checkbox" id="t-surface" checked> Probability</label>
+  <label class="rng"><span class="sr">Probability opacity</span><input type="range" id="opacity" min="30" max="100" value="80" aria-label="Probability layer opacity"></label>
   <label class="chk"><input type="checkbox" id="t-stations"> Stations</label>
-  <label class="rng">Surface opacity
-    <input type="range" id="opacity" min="30" max="100" value="80" aria-label="Surface opacity">
-  </label>
   <div class="find">
     <input type="search" id="find" placeholder="Find a station…" autocomplete="off" aria-label="Find a station" aria-controls="find-results">
     <ul id="find-results" role="listbox" hidden></ul>
@@ -47,7 +60,7 @@
 
 <main class="layout">
   <div class="mapwrap">
-    <div id="map" aria-label="Map of the probability of a white Christmas. Click a point to read its value."></div>
+    <div id="map" aria-label="Map of the probability of a white christmas. Click a point to read its value."></div>
     <p id="map-error" class="map-error" hidden></p>
   </div>
 
@@ -69,18 +82,21 @@
           <tbody></tbody>
         </table>
       </details>
-      <p class="note">Area-weighted share of the interpolated surface.</p>
+      <p class="note">True-area-weighted share of the estimated surface.</p>
     </section>
   </aside>
 </main>
 
 <footer class="page foot">
-  <p><strong>Source.</strong> NOAA National Centers for Environmental Information — station probabilities derived from the 1991–2020 U.S. Climate Normals (the table behind Climate.gov’s “Historical Probability of a White Christmas” map). <a id="src-link" href="https://www.ncei.noaa.gov/media/3501">Station spreadsheet</a> · <a href="data/stations.csv">stations.csv</a></p>
-  <p><strong>Method.</strong> <span id="method">Station values are interpolated to a grid.</span> The surface is this dashboard’s own interpolation, not NOAA’s, and it does not account for terrain, so mountain areas with sparse stations are smoothed. Climatology is not a forecast; check <a href="https://www.weather.gov/">weather.gov</a> within a week of the holiday.</p>
-  <p><strong>Colour.</strong> <span id="palette">ColorBrewer Blues</span> (Brewer, colorbrewer2.org); lighter = higher chance on the dark basemap. Basemap © OpenStreetMap contributors © CARTO. <span id="built"></span></p>
+  <p><strong>Source.</strong> NOAA National Centers for Environmental Information — station probabilities from the 1991–2020 U.S. Climate Normals (the data behind NOAA’s “Historic probability of at least 1 inch of snow on December 25” map). <a id="src-link" href="https://www.ncei.noaa.gov/media/3501">NCEI station spreadsheet</a> · <a href="data/stations.csv">stations.csv</a></p>
+  <p><strong>Projection.</strong> North America Lambert Conformal Conic (ESRI:102009), the same projection as NOAA’s interactive map.</p>
+  <p><strong>Method.</strong> <span id="method">Station values are interpolated to a grid.</span> This surface is this dashboard’s own estimate, not NOAA’s thin-plate-spline surface. Climatology is not a forecast; check <a href="https://www.weather.gov/">weather.gov</a> within a week of the holiday.</p>
+  <p><strong>Credits.</strong> <span id="palette">ColorBrewer Blues</span> (Brewer, colorbrewer2.org). Boundaries and places: Natural Earth. <span id="built"></span></p>
 </footer>
 
 <script src="vendor/leaflet/leaflet.js"></script>
+<script src="vendor/proj4/proj4.js"></script>
+<script src="vendor/proj4leaflet/proj4leaflet.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

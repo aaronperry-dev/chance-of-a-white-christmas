@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import time
 from pathlib import Path
+from typing import Callable
 
 import requests
 
@@ -16,17 +17,29 @@ class FetchError(RuntimeError):
     pass
 
 
-def ensure_file(url: str, dest: Path, *, min_bytes: int = 1000, retries: int = 3) -> Path:
+def ensure_file(url: str, dest: Path, *, min_bytes: int = 1000, retries: int = 3,
+                validate: Callable[[Path], None] | None = None) -> Path:
     """Return ``dest``, downloading ``url`` first if it is not already cached.
 
     A file already present in ``dest`` is always used as-is, so you can drop a
     manually downloaded copy into ``data/raw/`` (or commit it) and the
     pipeline never touches the network for it.
+
+    ``validate(path)`` may raise ``FetchError`` if the content is not what was
+    expected (e.g. an HTML error page served with HTTP 200). A cached file that
+    fails validation is deleted and downloaded again; a bad download is never
+    cached.
     """
     dest = Path(dest)
     if dest.exists() and dest.stat().st_size >= min_bytes:
-        log.info("using cached %s", dest)
-        return dest
+        try:
+            if validate:
+                validate(dest)
+            log.info("using cached %s", dest)
+            return dest
+        except FetchError as exc:
+            log.warning("cached %s is unusable (%s); downloading again", dest, exc)
+            dest.unlink()
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + ".part")
@@ -42,6 +55,8 @@ def ensure_file(url: str, dest: Path, *, min_bytes: int = 1000, retries: int = 3
                         fh.write(chunk)
             if tmp.stat().st_size < min_bytes:
                 raise FetchError(f"download too small ({tmp.stat().st_size} bytes)")
+            if validate:
+                validate(tmp)
             tmp.replace(dest)
             return dest
         except (requests.RequestException, FetchError, OSError) as exc:
