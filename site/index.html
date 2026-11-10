@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Probability of a White Christmas · CONUS</title>
+<meta name="description" content="Historical probability of at least 1 inch of snow on the ground on December 25 across the contiguous U.S., from NOAA NCEI 1991–2020 Climate Normals.">
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="demo-banner" class="banner" role="note" hidden>
+  <span aria-hidden="true">⚠</span> <strong>DEMO DATA</strong> — synthetic values for layout testing. This is not NOAA data.
+</div>
+
+<header class="page">
+  <h1>Probability of a White Christmas</h1>
+  <p class="sub">Historical chance of at least <strong>1&nbsp;inch of snow on the ground</strong> on December&nbsp;25 across the contiguous U.S. · <span id="period">1991–2020 U.S. Climate Normals</span></p>
+</header>
+
+<section class="kpis" aria-label="Headline figures">
+  <div class="tile">
+    <div class="hero" id="kpi-ge50">–</div>
+    <div class="lbl">of CONUS land area has a <b>50% or better</b> chance</div>
+  </div>
+  <div class="tile">
+    <div class="hero" id="kpi-lt10">–</div>
+    <div class="lbl">of CONUS land area has <b>under a 10%</b> chance</div>
+  </div>
+  <div class="tile">
+    <div class="hero" id="kpi-n">–</div>
+    <div class="lbl">weather stations behind the map</div>
+  </div>
+</section>
+
+<section class="toolbar" aria-label="Map controls">
+  <label class="chk"><input type="checkbox" id="t-surface" checked> Probability surface</label>
+  <label class="chk"><input type="checkbox" id="t-stations"> Stations</label>
+  <label class="rng">Surface opacity
+    <input type="range" id="opacity" min="30" max="100" value="80" aria-label="Surface opacity">
+  </label>
+  <div class="find">
+    <input type="search" id="find" placeholder="Find a station…" autocomplete="off" aria-label="Find a station" aria-controls="find-results">
+    <ul id="find-results" role="listbox" hidden></ul>
+  </div>
+</section>
+
+<main class="layout">
+  <div class="mapwrap">
+    <div id="map" aria-label="Map of the probability of a white Christmas. Click a point to read its value."></div>
+    <p id="map-error" class="map-error" hidden></p>
+  </div>
+
+  <aside class="side">
+    <section class="card" aria-labelledby="h-read">
+      <h2 id="h-read">At this point</h2>
+      <div id="readout" aria-live="polite">
+        <p class="hint">Click anywhere on the map, or pick a station, to read the probability there.</p>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="h-area">
+      <h2 id="h-area">Land area by probability</h2>
+      <ul id="classes" class="classes"></ul>
+      <details class="tableview">
+        <summary>Table view</summary>
+        <table id="class-table">
+          <thead><tr><th scope="col">Chance</th><th scope="col">Share of CONUS area</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </details>
+      <p class="note">Area-weighted share of the interpolated surface.</p>
+    </section>
+  </aside>
+</main>
+
+<footer class="page foot">
+  <p><strong>Source.</strong> NOAA National Centers for Environmental Information — station probabilities derived from the 1991–2020 U.S. Climate Normals (the table behind Climate.gov’s “Historical Probability of a White Christmas” map). <a id="src-link" href="https://www.ncei.noaa.gov/media/3501">Station spreadsheet</a> · <a href="data/stations.csv">stations.csv</a></p>
+  <p><strong>Method.</strong> <span id="method">Station values are interpolated to a grid.</span> The surface is this dashboard’s own interpolation, not NOAA’s, and it does not account for terrain, so mountain areas with sparse stations are smoothed. Climatology is not a forecast; check <a href="https://www.weather.gov/">weather.gov</a> within a week of the holiday.</p>
+  <p><strong>Colour.</strong> <span id="palette">ColorBrewer Blues</span> (Brewer, colorbrewer2.org); lighter = higher chance on the dark basemap. Basemap © OpenStreetMap contributors © CARTO. <span id="built"></span></p>
+</footer>
+
+<script src="vendor/leaflet/leaflet.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
