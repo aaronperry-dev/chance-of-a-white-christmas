@@ -373,3 +373,24 @@ def test_build_without_base_removes_stale_base_files(tmp_path):
         (tmp_path / f).write_bytes(b"x")
     meta = build(_stations(), box_polys(), tmp_path, res=20_000, use_terrain=False)
     assert meta["base"] is None and not (tmp_path / "base_light.webp").exists()
+
+
+# ============================================================ vector simplification (49th parallel regression)
+def test_borders_along_a_parallel_are_simplified_in_the_map_projection():
+    from pipeline.webvec import simplify_ll
+    lon = np.linspace(-123.0, -95.0, 70)                                       # the 49th parallel, densified like Natural Earth's
+    ring = np.column_stack([np.r_[lon, lon[::-1], lon[0]], np.r_[np.full(70, 49.0), np.full(70, 55.0), 49.0]])
+    naive = ring[[0, 69, 70, 139, 140]]                                        # what degree-based simplification leaves: one chord
+    x, y = geo.lonlat_to_xy(naive[:2, 0], naive[:2, 1]); xm, ym = geo.lonlat_to_xy(-109.0, 49.0)
+    chord_y = np.interp(xm, x, y)
+    assert (chord_y - ym) > 50_000                                             # that chord sits >50 km off the real border
+    kept = simplify_ll(ring, 3000.0)
+    assert 5 < len(kept) < len(ring)
+    top = kept[kept[:, 1] < 50]
+    xs, ys = geo.lonlat_to_xy(top[:, 0], top[:, 1])
+    order = np.argsort(xs)
+    probe = np.linspace(xs.min(), xs.max(), 300)
+    ylat = np.interp(probe, xs[order], ys[order])
+    lo, _ = geo.xy_to_lonlat(probe, ylat)
+    _, yt = geo.lonlat_to_xy(lo, np.full_like(lo, 49.0))
+    assert np.abs(yt - ylat).max() < 3500.0                                    # within the tolerance of the true parallel

@@ -1,7 +1,10 @@
 """Vector context for the web map: state lines, Canada/Mexico land, city + state labels.
 
-Everything stays in lon/lat; the browser projects it with the same ESRI:102009
-definition, so nothing here depends on the map projection.
+Coordinates stay in lon/lat (the browser projects them with the same ESRI:102009 definition),
+but they are SIMPLIFIED IN THE MAP PROJECTION, in metres. Simplifying in degrees is wrong here:
+a border that follows a parallel (the 49th, for one) is a straight line in lon/lat, so degree-based
+simplification collapses it to a single chord, yet in Lambert Conformal Conic a parallel is an arc,
+and a 27-degree chord lies up to ~80 km off the real border.
 """
 from __future__ import annotations
 
@@ -11,15 +14,21 @@ from pathlib import Path
 import numpy as np
 
 from . import config as C
+from .geo import lonlat_to_xy
 
 REGION = (-142.0, 12.0, -46.0, 62.0)  # lon/lat box the map can show
 
 
 def rdp(pts: np.ndarray, eps: float) -> np.ndarray:
     """Douglas-Peucker simplification (iterative, numpy)."""
+    return pts[rdp_mask(pts, eps)]
+
+
+def rdp_mask(pts: np.ndarray, eps: float) -> np.ndarray:
+    """Boolean mask of the vertices Douglas-Peucker keeps (distances in the units of ``pts``)."""
     n = len(pts)
     if n < 5:
-        return pts
+        return np.ones(n, bool)
     keep = np.zeros(n, bool)
     keep[0] = keep[-1] = True
     stack = [(0, n - 1)]
@@ -40,11 +49,18 @@ def rdp(pts: np.ndarray, eps: float) -> np.ndarray:
             m = i + 1 + k
             keep[m] = True
             stack += [(i, m), (m, j)]
-    return pts[keep]
+    return keep
 
 
-def _ring(r, eps: float, nd: int = 3) -> list:
-    pts = rdp(np.asarray(r, float)[:, :2], eps)
+def simplify_ll(ring_ll: np.ndarray, eps_m: float) -> np.ndarray:
+    """Simplify a lon/lat ring so no dropped vertex is more than ``eps_m`` metres (in LCC) from the result."""
+    ll = np.asarray(ring_ll, float)[:, :2]
+    x, y = lonlat_to_xy(ll[:, 0], ll[:, 1])
+    return ll[rdp_mask(np.column_stack([x, y]), eps_m)]
+
+
+def _ring(r, eps_m: float, nd: int = 3) -> list:
+    pts = simplify_ll(r, eps_m)
     if len(pts) < 4:
         return []
     return np.round(pts, nd).tolist()
@@ -67,7 +83,7 @@ def _feature(polys: list, props: dict) -> dict | None:
     return {"type": "Feature", "properties": props, "geometry": geom}
 
 
-EPS = [0.004]
+EPS = [500.0]            # metres in the map projection (set per layer below)
 
 
 def _centroid(ring: np.ndarray) -> tuple[float, float]:
@@ -89,7 +105,7 @@ def build_vectors(admin1: Path, countries: Path, places: Path, out_dir: Path) ->
         p = f.get("properties") or {}
         if p.get("admin") != "United States of America" or p.get("name") in C.NON_CONUS:
             continue
-        EPS[0] = 0.004
+        EPS[0] = 500.0          # ~1/3 pixel at the finest zoom
         feat = _feature(_geom_polys(f["geometry"]), {"name": p.get("name"), "postal": p.get("postal")})
         if feat:
             states.append(feat)
@@ -106,7 +122,7 @@ def build_vectors(admin1: Path, countries: Path, places: Path, out_dir: Path) ->
         p = f.get("properties") or {}
         if p.get("ADM0_A3") not in ("CAN", "MEX"):
             continue
-        EPS[0] = 0.03
+        EPS[0] = 3000.0         # context only; ~1 pixel at the opening zoom
         polys = []
         for poly in _geom_polys(f["geometry"]):
             r = np.asarray(poly[0], float)
