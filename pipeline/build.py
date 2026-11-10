@@ -1,11 +1,15 @@
-"""Pipeline entry point:  python -m pipeline.build [--demo] [--stations FILE]
+"""Pipeline entry point:  python -m pipeline.build [--demo] [--stations FILE] [--res METRES]
 
-  NOAA station table  ->  site/data/{stations.json, stations.csv, meta.json}
-  Natural Earth       ->  site/data/{states.geojson, context.geojson, places.json}  (optional overlays)
+  NOAA station table   -+
+  AWS terrain tiles    -+->  1 km terrain-aware surface in NOAA's projection and classes
+  Natural Earth land   -+     -> site/data/{overlay.png, relief.webp, values.bin.gz,
+                                            stations.json, stations.csv, meta.json}
+  Natural Earth        ->  site/data/{states.geojson, context.geojson, places.json}  (optional overlays)
 
-The map itself is NOAA's own cached tile service (see config.TILES_URL); this
-pipeline supplies the station values behind click look-ups, the legend, headline
-figures and the optional state-line / label overlays.
+NOAA's published tiles bake station dots and labels into the image, and NOAA publishes no raw
+grid, so this builds an equivalent surface from the same station values. Terrain (AWS Terrarium
+elevation) shapes the surface between stations and supplies the hillshade. NOAA's own tiles stay
+available on the page as an optional reference layer.
 """
 from __future__ import annotations
 
@@ -21,7 +25,13 @@ import numpy as np
 import pandas as pd
 
 from . import config as C
+from . import dem as demmod
+from .boundary import load_conus_polygons
 from .fetch import FetchError, ensure_file
+from .geo import LccGrid, lonlat_to_xy
+from .grid import classify, polygon_extent, project_polygons, rasterize_mask
+from .interp import Estimator, interpolate_grid, loo_cv
+from .render import area_stats, render_overlay, render_relief, write_value_grid
 
 log = logging.getLogger("pipeline")
 
@@ -39,7 +49,24 @@ def station_stats(prob: np.ndarray) -> dict:
     }
 
 
-def build(stations: pd.DataFrame, out_dir: Path, *, synthetic: bool = False, source: dict | None = None) -> dict:
+def make_grid(polygons, res: float = C.GRID_RES_M):
+    projected = project_polygons(polygons)
+    xmin, ymin, xmax, ymax = polygon_extent(projected)
+    pad = C.GRID_PAD_M
+    return LccGrid.from_extent(xmin - pad, ymin - pad, xmax + pad, ymax + pad, res), projected
+
+
+def _station_pixels(st: pd.DataFrame, grid: LccGrid):
+    x, y = lonlat_to_xy(st.lon.values, st.lat.values)
+    px, py = grid.to_pixel(x, y)
+    return (np.asarray(x), np.asarray(y),
+            np.clip(py.astype(int), 0, grid.ny - 1), np.clip(px.astype(int), 0, grid.nx - 1))
+
+
+def build(stations: pd.DataFrame, polygons, out_dir: Path, *, res: float = C.GRID_RES_M, dem: np.ndarray | None = None,
+          grid: LccGrid | None = None, dem_label: str = "", use_terrain: bool = True, dem_zoom: int = C.DEM_ZOOM,
+          synthetic: bool = False, source: dict | None = None) -> dict:
+    """Build every data asset. ``dem`` (ny, nx) is fetched from AWS when omitted and ``use_terrain`` is set."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -50,6 +77,51 @@ def build(stations: pd.DataFrame, out_dir: Path, *, synthetic: bool = False, sou
     if "elev_m" not in st:
         st["elev_m"] = np.nan
     log.info("%d stations inside CONUS bbox", len(st))
+
+    projected = project_polygons(polygons)
+    if grid is None:
+        grid, projected = make_grid(polygons, res)
+    log.info("grid %d x %d at %.0f m", grid.nx, grid.ny, grid.res)
+    coverage = rasterize_mask(grid, projected)
+    land = coverage > 0.02
+
+    if dem is None and use_terrain:
+        dem = demmod.dem_on_grid(grid, C.RAW_DIR / C.TERRAIN_CACHE, dem_zoom)
+        dem_label = dem_label or "AWS Open Data Terrain Tiles (Terrarium), zoom %d" % dem_zoom
+    if dem is not None:
+        dem = np.maximum(dem, 0.0).astype(np.float32)       # sea level floor: no coastal cliffs into the sea
+
+    sx, sy, sr, sc = _station_pixels(st, grid)
+    prob = st.prob.values.astype(float)
+    cv: dict = {}
+    method = "idw"
+    if dem is not None:
+        # station elevation in the SAME (1 km DEM) space as the grid cells it is compared with
+        sz = dem[sr, sc].astype(float)
+        cv["idw"] = loo_cv(sx, sy, sz, prob, "idw")
+        cv["terrain"] = loo_cv(sx, sy, sz, prob, "terrain")
+        log.info("leave-one-out RMSE (pct points): IDW %.2f | terrain-aware %.2f  (n=%d)",
+                 cv["idw"]["rmse"], cv["terrain"]["rmse"], cv["terrain"]["n"])
+        if cv["terrain"]["rmse"] <= cv["idw"]["rmse"]:
+            method = "terrain"
+        else:
+            log.warning("terrain-aware model did not beat IDW in cross-validation; using IDW (relief is still drawn)")
+        est = Estimator(sx, sy, sz, prob, method)
+        values = interpolate_grid(est, grid, land, dem)
+    else:
+        est = Estimator(sx, sy, np.zeros_like(sx), prob, "idw")
+        values = interpolate_grid(est, grid, land, None)
+        log.info("no terrain: plain IDW surface")
+    cv["chosen"] = method
+
+    cls = classify(values)
+    render_overlay(cls, coverage, C.NOAA_COLORS, out_dir / "overlay.png")
+    write_value_grid(values, coverage, out_dir / "values.bin.gz")
+    has_relief = dem is not None
+    if has_relief:
+        render_relief(demmod.hillshade(dem, grid.res), coverage, out_dir / "relief.webp")
+    else:
+        (out_dir / "relief.webp").unlink(missing_ok=True)
 
     recs = [{"id": r.id, "n": r.name, "s": r.state, "la": round(r.lat, 4), "lo": round(r.lon, 4),
              "e": None if pd.isna(r.elev_m) else round(float(r.elev_m)), "p": int(round(r.prob)),
@@ -68,11 +140,15 @@ def build(stations: pd.DataFrame, out_dir: Path, *, synthetic: bool = False, sou
     meta = {
         "title": "Probability of a White Christmas",
         "definition": "Chance of at least 1 inch of snow on the ground on December 25",
-        "period": "1991–2020 U.S. Climate Normals",
+        "period": "1991\u20132020 U.S. Climate Normals",
         "synthetic": synthetic,
         "built_utc": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         "source": source or {},
         "crs": {"name": C.LCC_NAME, "proj4": C.LCC_PROJ, "extent": list(C.NOAA_EXTENT)},
+        "grid": grid.as_meta(),
+        "surface": {"overlay": "overlay.png", "relief": "relief.webp" if has_relief else None,
+                    "values": "values.bin.gz", "nodata": 255, "method": method,
+                    "dem": dem_label if has_relief else "", "cv": cv},
         "tiles": {
             "url": C.TILES_URL, "service": C.TILES_SERVICE_PAGE, "size": C.TILE_SIZE,
             "origin": list(C.TILE_ORIGIN), "resolutions": C.TILE_RESOLUTIONS,
@@ -82,7 +158,8 @@ def build(stations: pd.DataFrame, out_dir: Path, *, synthetic: bool = False, sou
                      "lo": 0 if i == 0 else C.CLASS_UPPER_EDGES[i - 1],
                      "hi": 100 if i == len(C.CLASS_UPPER_EDGES) else C.CLASS_UPPER_EDGES[i]}
                     for i, lab in enumerate(labels)],
-        "stats": station_stats(np.round(st.prob.values.astype(float))),   # same rounding as stations.json
+        "stats": area_stats(values, cls, coverage, grid, len(C.NOAA_COLORS)),
+        "station_stats": station_stats(np.round(prob)),     # same rounding as stations.json
         "n_stations": int(len(st)),
     }
     (out_dir / "meta.json").write_text(json.dumps(meta, indent=1))
@@ -111,15 +188,24 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--refresh", action="store_true", help="re-download the station layer even if cached")
     ap.add_argument("--out", type=Path, default=C.OUT_DIR)
     ap.add_argument("--no-overlays", action="store_true", help="skip the Natural Earth state-line / label overlays")
+    ap.add_argument("--res", type=float, default=C.GRID_RES_M, help="grid cell size in metres (default %(default)s)")
+    ap.add_argument("--dem-zoom", type=int, default=C.DEM_ZOOM, help="AWS terrain tile zoom (7 ~ 1 km, 8 ~ 0.5 km)")
+    ap.add_argument("--no-terrain", action="store_true", help="skip the AWS terrain download: plain IDW surface, no relief")
     ap.add_argument("--demo", action="store_true",
-                    help="SYNTHETIC stations (layout testing only; page shows a banner)")
+                    help="SYNTHETIC stations and terrain (layout testing only; page shows a banner)")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     args.out.mkdir(parents=True, exist_ok=True)
 
+    boundary = ensure_file(C.BOUNDARY_URL, C.RAW_DIR / C.BOUNDARY_FILE, min_bytes=10_000)
+    polygons = load_conus_polygons(boundary)
+    grid, dem, dem_label = None, None, ""
+
     if args.demo:
-        from .demo import make_demo_stations
-        stations = make_demo_stations()
+        from .demo import make_demo_stations, synthetic_dem
+        grid, _ = make_grid(polygons, args.res)
+        dem, dem_label = synthetic_dem(grid), "SYNTHETIC terrain"
+        stations = make_demo_stations(polygons, grid, dem)
         source = {"name": "SYNTHETIC DEMO", "url": "", "file": ""}
     else:
         stations, source, arcgis_error = None, {}, None
@@ -146,13 +232,14 @@ def main(argv: list[str] | None = None) -> int:
                                  f"  NCEI spreadsheet:   {exc}") from exc
             source = {"name": "NOAA NCEI station spreadsheet", "url": C.STATIONS_URL, "file": Path(path).name}
 
-    meta = build(stations, args.out, synthetic=args.demo, source=source)
+    meta = build(stations, polygons, args.out, res=args.res, dem=dem, grid=grid, dem_label=dem_label,
+                 use_terrain=not args.no_terrain, dem_zoom=args.dem_zoom, synthetic=args.demo, source=source)
     if not args.no_overlays:
         _vectors(args.out)
 
     s = meta["stats"]
-    log.info("done: %d stations | %.1f%% of stations >=50%% | %.1f%% <=10%% | -> %s",
-             meta["n_stations"], 100 * s["share_ge_50"], 100 * s["share_le_10"], args.out)
+    log.info("done: %d stations | %s surface | %.1f%% of land >=50%% | %.1f%% <=10%% | -> %s",
+             meta["n_stations"], meta["surface"]["method"], 100 * s["share_ge_50"], 100 * s["share_le_10"], args.out)
     if meta["n_stations"] < 500 and not args.demo:
         log.warning("only %d stations - double-check the input", meta["n_stations"])
     return 0

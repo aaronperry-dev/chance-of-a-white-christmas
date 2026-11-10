@@ -1,7 +1,8 @@
 /* White Christmas dashboard.
- * The coloured surface is NOAA's own cached map service (ArcGIS tiles) drawn in its native
- * tile grid and projection, ESRI:102009 (North America Lambert Conformal Conic).
- * Everything else (stations, legend, optional state lines / labels) comes from ./data/*. */
+ * The coloured surface is built by the pipeline (a 1 km grid estimated from NOAA's station values and
+ * terrain) and drawn here as two images (class colours + hillshade) positioned in NOAA's tile grid and
+ * projection, ESRI:102009 (North America Lambert Conformal Conic). NOAA's own tiles are an optional
+ * reference layer. Stations, legend and the optional state lines / labels come from ./data/*. */
 (async function () {
   'use strict';
 
@@ -36,15 +37,36 @@
     box.textContent = 'Map data not found. Run "python -m pipeline.build" (or let the GitHub Action run) to generate site/data/. ' + err.message;
     return;
   }
-  const [statesGJ, places] = await Promise.all([optional('data/states.geojson'), optional('data/places.json')]);
+  const [statesGJ, ctxGJ, places] = await Promise.all([optional('data/states.geojson'), optional('data/context.geojson'), optional('data/places.json')]);
+  const SURF = meta.surface;
+
+  /* value grid: one byte per 1 km cell (255 = outside land), gzip. Loaded in the background; clicks
+   * fall back to the nearest station until it arrives (or if the browser cannot decompress it). */
+  let valueGrid = null;
+  (async () => {
+    try {
+      const buf = new Uint8Array(await (await fetch('data/' + SURF.values)).arrayBuffer());
+      let raw = buf;
+      if (buf[0] === 0x1f && buf[1] === 0x8b) {                          // still gzipped (the server did not decode it)
+        const ds = new Blob([buf]).stream().pipeThrough(new DecompressionStream('gzip'));
+        raw = new Uint8Array(await new Response(ds).arrayBuffer());
+      }
+      if (raw.length === meta.grid.nx * meta.grid.ny) { valueGrid = raw; if (last) rerenderLast(); }
+    } catch (e) { /* no value grid: station-only look-ups */ }
+  })();
 
   /* ---------- static text ---------- */
   if (meta.synthetic) $('#demo-banner').hidden = false;
   $('#period').textContent = meta.period;
   $('#built').textContent = 'Built ' + meta.built_utc + '.';
-  $('#credit').textContent = 'Map: ' + meta.tiles.attribution + '.';
+  $('#credit').textContent = meta.tiles.attribution + '.';
   $('#kpi-ge50').textContent = pct(meta.stats.share_ge_50);
   $('#kpi-le10').textContent = pct(meta.stats.share_le_10);
+  const cv = SURF.cv && SURF.cv[SURF.cv.chosen];
+  $('#method').textContent = SURF.method === 'terrain'
+    ? 'terrain-aware (local regression on elevation plus residual interpolation)' : 'inverse-distance interpolation';
+  $('#dem').textContent = SURF.dem ? ' Elevation: ' + SURF.dem + '.' : ' No terrain data was used.';
+  $('#cv').textContent = cv ? 'Leave-one-out check at the stations: typical error ' + cv.mae.toFixed(1) + ' percentage points (RMS ' + cv.rmse.toFixed(1) + ').' : '';
   $('#kpi-n').textContent = meta.n_stations.toLocaleString('en-US');
   if (meta.source && meta.source.url) $('#src-link').href = meta.source.url;
   if (meta.tiles.service) $('#tiles-link').href = meta.tiles.service;
@@ -95,10 +117,43 @@
 
   /* ---------- panes ---------- */
   const pane = (name, z) => { const p = map.createPane(name); p.style.zIndex = z; return p; };
-  pane('lines', 400); pane('stations', 500);
+  pane('ctx', 210); pane('surface', 250); pane('relief', 260); pane('ref', 270); pane('lines', 400); pane('stations', 500);
   pane('labels', 650).style.pointerEvents = 'none';
 
-  /* ---------- NOAA tiles ---------- */
+  /* ---------- our surface: images positioned in LCC metres ----------
+   * An ordinary image overlay would be placed by lat/lon corners, but the grid is a rectangle in the
+   * projection, not in lat/lon; so it is positioned from its projected corners at every zoom. */
+  const G = meta.grid;
+  const GridImage = L.Layer.extend({
+    initialize(url, paneName) { this._url = url; this.options = { pane: paneName }; },
+    onAdd() {
+      if (!this._img) {
+        const im = L.DomUtil.create('img', 'wc-img' + (this._map._zoomAnimated ? ' leaflet-zoom-animated' : ''));
+        im.alt = ''; im.decoding = 'async'; im.draggable = false; im.src = this._url;
+        this._img = im;
+      }
+      this.getPane().appendChild(this._img);
+      this._reset();
+    },
+    onRemove() { this._img.remove(); },
+    getEvents() { const e = { zoom: this._reset, viewreset: this._reset }; if (this._map._zoomAnimated) e.zoomanim = this._anim; return e; },
+    _corner(x, y, z, origin) { return crs.transformation.transform(L.point(x, y), crs.scale(z))._subtract(origin); },
+    _reset() {
+      const z = this._map.getZoom(), o = this._map.getPixelOrigin();
+      const a = this._corner(G.x0, G.y1, z, o), b = this._corner(G.x1, G.y0, z, o);
+      L.DomUtil.setPosition(this._img, a);
+      this._img.style.width = (b.x - a.x) + 'px'; this._img.style.height = (b.y - a.y) + 'px';
+    },
+    _anim(e) {
+      const o = this._map._getNewPixelOrigin(e.center, e.zoom);
+      L.DomUtil.setTransform(this._img, this._corner(G.x0, G.y1, e.zoom, o), this._map.getZoomScale(e.zoom));
+    },
+  });
+  const surfaceLayer = new GridImage('data/' + SURF.overlay, 'surface').addTo(map);
+  const reliefLayer = SURF.relief ? new GridImage('data/' + SURF.relief, 'relief').addTo(map) : null;
+  const ctxLayer = ctxGJ ? L.geoJSON(ctxGJ, { renderer: L.svg({ pane: 'ctx' }), interactive: false }).addTo(map) : null;
+
+  /* ---------- NOAA tiles (optional reference layer) ---------- */
   const [fx0, fy0, fx1, fy1] = T.full_extent, ZOFF = -1;
   const BLANK = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
   const NoaaTiles = L.TileLayer.extend({
@@ -111,8 +166,8 @@
   });
   const noaa = new NoaaTiles(T.url, {
     tileSize: T.size, zoomOffset: ZOFF, minNativeZoom: 1, maxNativeZoom: T.resolutions.length,
-    minZoom: 0, maxZoom: resolutions.length - 1, noWrap: true, errorTileUrl: BLANK, keepBuffer: 2, className: 'noaa-tiles',
-  }).addTo(map);
+    minZoom: 0, maxZoom: resolutions.length - 1, noWrap: true, errorTileUrl: BLANK, keepBuffer: 2, className: 'noaa-tiles', pane: 'ref',
+  });
 
   /* ---------- optional vector overlays ---------- */
   const lineLayer = statesGJ ? L.geoJSON(statesGJ, { renderer: L.svg({ pane: 'lines' }), interactive: false }) : null;
@@ -227,19 +282,28 @@
     return { s: best, mi: 2 * R * Math.asin(Math.sqrt(a)) };
   }
 
+  /* ---------- value at a point (exact grid cell the map shows) ---------- */
+  function valueAt(ll) {
+    if (!valueGrid) return undefined;                               // not loaded
+    const p = proj(ll), c = Math.floor((p.x - G.x0) / G.res), r = Math.floor((G.y1 - p.y) / G.res);
+    if (c < 0 || r < 0 || c >= G.nx || r >= G.ny) return null;
+    const v = valueGrid[r * G.nx + c];
+    return v === SURF.nodata ? null : v;
+  }
+
   /* ---------- readout ---------- */
   let marker = null, last = null;
   function setMarker(ll) {
     if (marker) marker.remove();
     marker = L.circleMarker(ll, { pane: 'stations', radius: 7, weight: 2, color: css('--ring'), fillColor: css('--card'), fillOpacity: 0.9, interactive: false }).addTo(map);
   }
-  function renderReadout(s, lines) {
+  function renderReadout(p, kind, lines) {
     const box = $('#readout');
     box.replaceChildren();
     const top = el('div', 'read-top'), sw = el('span', 'sw');
-    sw.style.background = colorOf(s.p);
-    top.append(el('span', 'big', s.p + '%'), sw);
-    box.append(top, el('div', 'readout-kind', meta.synthetic ? 'Synthetic demo value (not NOAA data)' : 'Chance of ≥1 in. snow on the ground, Dec 25'));
+    sw.style.background = colorOf(p);
+    top.append(el('span', 'big', p + '%'), sw);
+    box.append(top, el('div', 'readout-kind', meta.synthetic ? 'Synthetic demo value (not NOAA data)' : kind));
     for (const parts of lines) {
       const d = el('div', 'read-meta');
       parts.forEach((t, i) => d.append(i % 2 ? el('b', null, t) : document.createTextNode(t)));
@@ -253,29 +317,42 @@
     if (s.y) lines.push(['Years of record: ', String(s.y), '']);
     return lines;
   };
+  const KIND_EST = 'Estimated chance of ≥1 in. snow on the ground, Dec 25';
+  const KIND_STN = 'Station value: chance of ≥1 in. snow on the ground, Dec 25';
   function selectPoint(ll) {
     last = { type: 'point', ll };
     setMarker(ll);
-    const n = nearestStation(ll.lat, ll.lng);
-    if (!n) return;
-    renderReadout(n.s, [['Station: ', stationName(n.s), ' — ' + n.mi.toFixed(0) + ' mi from the point you clicked'], ...stationFacts(n.s)]);
+    const v = valueAt(ll), n = nearestStation(ll.lat, ll.lng);
+    if (v === null) {                                             // outside the land the surface covers
+      const box = $('#readout');
+      box.replaceChildren(el('p', 'hint', 'No estimate here: this point is outside the contiguous U.S. land area.'));
+      return;
+    }
+    const near = n ? [['Nearest station: ', stationName(n.s) + ' — ' + n.s.p + '%', ' (' + n.mi.toFixed(0) + ' mi away)']] : [];
+    if (v === undefined) {                                        // value grid unavailable: station only
+      if (n) renderReadout(n.s.p, KIND_STN, [['Station: ', stationName(n.s), ' — ' + n.mi.toFixed(0) + ' mi from the point you clicked'], ...stationFacts(n.s)]);
+      return;
+    }
+    renderReadout(v, KIND_EST, [...near, ['Modelled from nearby stations', '', meta.surface.method === 'terrain' ? ' and terrain; not a measurement at this spot.' : '; not a measurement at this spot.']]);
   }
   function selectStation(s, fly) {
     last = { type: 'station', s };
     setMarker(L.latLng(s.la, s.lo));
     if (fly) map.flyTo([s.la, s.lo], Math.max(map.getZoom(), 4), { duration: 0.8 });
-    renderReadout(s, [['Station: ', stationName(s), ''], ...stationFacts(s), ['ID: ', s.id, '']]);
+    renderReadout(s.p, KIND_STN, [['Station: ', stationName(s), ''], ...stationFacts(s), ['ID: ', s.id, '']]);
   }
+  const rerenderLast = () => { if (last) { last.type === 'point' ? selectPoint(last.ll) : selectStation(last.s, false); } };
   map.on('click', (e) => selectPoint(e.latlng));
 
-  /* ---------- theme (page chrome and overlays; NOAA's tiles keep NOAA's colours) ---------- */
+  /* ---------- theme (page chrome, water / context colours and overlays; the class colours are NOAA's in both themes) ---------- */
   function paint() {
     root.dataset.theme = theme;
     document.querySelectorAll('[data-theme-set]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.themeSet === theme)));
     if (lineLayer) lineLayer.setStyle({ stroke: true, color: css('--border'), weight: 0.9, fill: false, lineJoin: 'round' });
+    if (ctxLayer) ctxLayer.setStyle({ stroke: true, color: css('--ctx-line'), weight: 0.6, fill: true, fillColor: css('--ctx'), fillOpacity: 1 });
     stationMarkers.forEach((m, i) => m.setStyle({ fillColor: colorOf(stations[i].p), color: css('--ring') }));
     renderLegend(); renderClasses();
-    if (last) { last.type === 'point' ? selectPoint(last.ll) : selectStation(last.s, false); }
+    rerenderLast();
   }
   document.querySelectorAll('[data-theme-set]').forEach((b) => b.addEventListener('click', () => {
     theme = b.dataset.themeSet;
@@ -323,7 +400,20 @@
     if (showingAll) fitView();                                    // then use the new space; else keep the user's view
   });
   const toggle = (id, layer) => $(id).addEventListener('change', (e) => { e.target.checked ? layer.addTo(map) : layer.remove(); });
-  if (lineLayer) toggle('#t-lines', lineLayer);
+  toggle('#t-noaa', noaa);
+  if (lineLayer) { toggle('#t-lines', lineLayer); $('#t-lines').checked = true; lineLayer.addTo(map); }
+  const reliefBox = $('#t-relief'), reliefRange = $('#r-relief');
+  if (reliefLayer) {
+    const setRelief = () => {
+      const on = reliefBox.checked;
+      on ? reliefLayer.addTo(map) : reliefLayer.remove();
+      reliefRange.disabled = !on;
+      map.getPane('relief').style.opacity = String(reliefRange.value / 100);
+    };
+    reliefBox.addEventListener('change', setRelief);
+    reliefRange.addEventListener('input', setRelief);
+    setRelief();
+  } else { reliefBox.checked = false; reliefBox.disabled = true; reliefRange.disabled = true; }
   $('#t-labels').addEventListener('change', (e) => {
     labelsOn = e.target.checked;
     labelsOn ? labelLayer.addTo(map) : labelLayer.remove();
@@ -363,5 +453,5 @@
   });
   input.addEventListener('blur', () => setTimeout(closeList, 120));
 
-  window.__wc = { map, crs, meta, noaa, proj, unproj, stationLayer, stations, classIndex, view: () => view };   // handy for debugging / tests
+  window.__wc = { map, crs, meta, noaa, proj, unproj, stationLayer, stations, classIndex, valueAt, grid: () => valueGrid, surfaceLayer, reliefLayer, view: () => view };   // handy for debugging / tests
 })();

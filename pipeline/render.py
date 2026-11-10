@@ -27,6 +27,21 @@ def render_overlay(cls: np.ndarray, coverage: np.ndarray, colors: list[str], pat
     Image.fromarray(rgba, "RGBA").save(path, optimize=True)
 
 
+def render_relief(shade: np.ndarray, coverage: np.ndarray, path: Path, quality: int = 80) -> None:
+    """Hillshade as a black/white overlay with alpha = |shade - flat| * land coverage.
+
+    Slopes facing away from the light become translucent black, slopes facing it translucent
+    white and flat ground is fully transparent, so it composites correctly over every class
+    colour (a multiply or soft-light blend would hide relief on the white top class). The page
+    scales the whole layer with CSS opacity (relief-strength slider).
+    """
+    d = (shade.astype(np.float32) - 128.0) / 128.0                 # -1 (shadow) .. +1 (lit)
+    alpha = np.clip(np.abs(d), 0, 1) * np.clip(coverage, 0, 1)
+    rgb = np.where(d < 0, 0, 255).astype(np.uint8)
+    rgba = np.dstack([rgb, rgb, rgb, np.round(alpha * 255).astype(np.uint8)])
+    Image.fromarray(rgba, "RGBA").save(path, "WEBP", quality=quality, alpha_quality=85, method=4)
+
+
 def write_value_grid(values: np.ndarray, coverage: np.ndarray, path: Path) -> None:
     """uint8 percent grid (255 = outside land), row-major, gzip-compressed.
 
@@ -39,26 +54,24 @@ def write_value_grid(values: np.ndarray, coverage: np.ndarray, path: Path) -> No
     path.write_bytes(gzip.compress(v.tobytes(), compresslevel=9, mtime=0))
 
 
-def area_stats(values: np.ndarray, cls: np.ndarray, coverage: np.ndarray,
-               grid: LccGrid, n_classes: int) -> dict:
-    """True-area-weighted shares of the land surface.
-
-    LCC is conformal, not equal-area: a pixel of ``res`` metres covers
-    res**2 / k**2 on the ground, k = scale factor at that latitude.
-    """
-    rows, cols = np.nonzero((cls >= 0) & (coverage > 0))
-    w = np.empty(len(rows), np.float64)
-    for s in range(0, len(rows), 2_000_000):
-        sl = slice(s, s + 2_000_000)
-        x, y = grid.pixel_xy(rows[sl], cols[sl])
-        _, lat = xy_to_lonlat(x, y)
-        w[sl] = coverage[rows[sl], cols[sl]] / scale_factor(lat) ** 2
-    v, c = values[rows, cols], cls[rows, cols]
-    total = w.sum()
-    by_class = np.bincount(c, weights=w, minlength=n_classes) / total
+def area_stats(values: np.ndarray, cls: np.ndarray, coverage: np.ndarray, grid: LccGrid, n_classes: int) -> dict:
+    """True-area-weighted shares. LCC is conformal, not equal-area: a pixel covers res^2 / k^2 on the ground."""
+    stride = max(1, min(8, min(grid.ny, grid.nx) // 25))
+    rows, cols = np.arange(0, grid.ny, stride), np.arange(0, grid.nx, stride)
+    cov = coverage[np.ix_(rows, cols)]
+    v, c = values[np.ix_(rows, cols)], cls[np.ix_(rows, cols)]
+    X, Y = np.meshgrid(grid.x_centers()[cols], grid.y_centers()[rows])
+    _, lat = xy_to_lonlat(X, Y)
+    w = (cov / scale_factor(lat) ** 2).astype(np.float64)
+    ok = (c >= 0) & (w > 0)
+    tot = float(w[ok].sum())
+    by = [float(w[ok & (c == i)].sum() / tot) for i in range(n_classes)]
+    pix_km2 = (grid.res / 1000.0) ** 2 * stride * stride
+    vv = np.where(np.isnan(v), -1.0, np.round(v))
     return {
-        "share_by_class": [round(float(x), 5) for x in by_class],
-        "share_ge_50": round(float(w[v >= 50].sum() / total), 5),
-        "share_lt_10": round(float(w[v < 10].sum() / total), 5),
-        "land_area_km2": round(float(total * (grid.res / 1000.0) ** 2)),
+        "basis": "land area",
+        "share_by_class": by,
+        "share_ge_50": float(w[ok & (vv >= 50)].sum() / tot),
+        "share_le_10": float(w[ok & (vv <= 10)].sum() / tot),
+        "land_area_km2": round(tot * pix_km2),
     }

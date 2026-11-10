@@ -1,4 +1,4 @@
-"""Central configuration: data sources, NOAA's tile service, projection and legend.
+"""Central configuration: data sources, projection, grid, terrain, estimation and legend.
 
 Everything the front end needs (tile grid, projection, legend classes and colours)
 is written to ``site/data/meta.json`` from here, so this file is the single
@@ -25,6 +25,18 @@ STATIONS_CACHE = "stations_arcgis.json"
 # Alternative / fallback: NCEI's downloadable spreadsheet of the same table.
 STATIONS_URL = "https://www.ncei.noaa.gov/media/3501"
 STATIONS_FILE = "Christmas_day_snow_statistics_1991-2020_updated.xlsx"
+
+# --- Terrain -----------------------------------------------------------------
+# AWS Open Data "Terrain Tiles" (Terrarium PNG encoding, Web Mercator, no key).
+TERRAIN_URL = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
+DEM_ZOOM = 7  # ~0.8-1.1 km/px over CONUS; 8 is ~2x finer (4x the download)
+TERRAIN_CACHE = "terrarium"
+
+# Hillshade (flat terrain renders mid-grey 128 so it can be blended over colour).
+HILLSHADE_AZIMUTH = 315.0
+HILLSHADE_ALTITUDE = 45.0
+HILLSHADE_Z = 4.0     # vertical exaggeration
+HILLSHADE_GAIN = 1.0
 
 # --- Boundaries / context (Natural Earth, via GitHub) ------------------------
 _NE = "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/"
@@ -65,6 +77,26 @@ TILE_RESOLUTIONS = [6879.180425027517, 3439.5902125137586, 1984.3789687579376,
 TILE_FULL_EXTENT = (-8918789.413932372, -6520590.090497846, 9364286.214718886, 4874706.13759461)
 TILE_ATTRIBUTION = ("NOAA, Oceanic and Atmospheric Research (OAR), Climate Program Office (CPO), "
                     "Climate.gov; NOAA National Centers for Environmental Information (NCEI)")
+
+# --- Grid --------------------------------------------------------------------
+GRID_RES_M = 1000    # pixel size in metres (NOAA's finest service tiles are ~500 m/px)
+GRID_PAD_M = 20_000  # margin around CONUS
+
+# --- Estimation --------------------------------------------------------------
+# Terrain-aware: local regression of logit(probability) on elevation (tricube
+# weights over the K nearest stations) + IDW of the regression residuals, so
+# the surface still reproduces the station values (to a fraction of a point).
+TERRAIN_K = 24
+RESID_POWER = 2.0
+RESID_EPS_M = 1000.0   # ~1 pixel: station values are reproduced to <0.5 percentage points
+RIDGE_M = 100.0        # shrinks the elevation slope toward 0 where stations barely differ in height
+SLOPE_MAX = 0.01       # max logit units per metre of elevation
+EXTRAPOLATE_MARGIN_M = 300.0
+LOGIT_EPS = 0.005
+# Plain IDW baseline (used when no DEM is available, and as the CV benchmark).
+IDW_K = 16
+IDW_POWER = 2.0
+IDW_EPS_M = 5000.0
 
 # --- Legend (NOAA's 8 classes) -------------------------------------------------
 # Labels and breaks follow NOAA's maps: 0-10, 11-25, 26-40, 41-50, 51-60, 61-75, 76-90, 91-100 %.

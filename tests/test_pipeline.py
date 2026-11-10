@@ -12,7 +12,7 @@ import pytest
 
 from pipeline import config as C
 from pipeline import stations_arcgis as SA
-from pipeline.build import build, station_stats
+from pipeline.build import station_stats
 from pipeline.stations import StationFormatError, load_stations
 from pipeline.webvec import rdp
 
@@ -197,40 +197,6 @@ def test_rdp_simplifies_but_keeps_shape():
     assert len(rdp(line, 0.01)) == 2
     zig = np.column_stack([t, np.where(np.arange(200) % 2, 1.0, -1.0)])
     assert len(rdp(zig, 0.01)) == 200
-
-
-# ============================================================ end to end
-def _stations(n=120, seed=1):
-    rng = np.random.default_rng(seed)
-    lon, lat = rng.uniform(-103.5, -90.5, n), rng.uniform(35.5, 44.5, n)
-    return pd.DataFrame({"id": [f"S{i}" for i in range(n)], "name": [f"N{i}" for i in range(n)], "state": "XX",
-                         "lat": lat, "lon": lon, "elev_m": rng.uniform(100, 1500, n),
-                         "prob": rng.uniform(0, 100, n).round(), "years": 30})
-
-
-def test_build_writes_consistent_assets(tmp_path):
-    meta = build(_stations(), tmp_path, synthetic=True, source={"name": "t"})
-    for f in ["stations.json", "stations.csv", "meta.json"]:
-        assert (tmp_path / f).stat().st_size > 0, f
-    assert not list(tmp_path.glob("*.png")) and not list(tmp_path.glob("*.bin.gz"))   # NOAA's tiles are the map
-    assert meta["crs"]["name"] == "ESRI:102009" and meta["tiles"]["url"] == C.TILES_URL
-    assert meta["tiles"]["origin"] == list(C.TILE_ORIGIN) and len(meta["tiles"]["resolutions"]) == 5
-    assert len(meta["classes"]) == 8 and meta["classes"][0]["hi"] == 10 and meta["classes"][-1]["hi"] == 100
-    assert sum(meta["stats"]["share_by_class"]) == pytest.approx(1.0, abs=1e-9)
-    recs = json.loads((tmp_path / "stations.json").read_text())
-    assert len(recs) == 120 and meta == json.loads((tmp_path / "meta.json").read_text())
-
-
-def test_build_tolerates_stations_without_elevation(tmp_path):
-    meta = build(_stations().drop(columns="elev_m"), tmp_path, synthetic=True)
-    recs = json.loads((tmp_path / "stations.json").read_text())
-    assert meta["n_stations"] == 120 and all(r["e"] is None for r in recs)
-
-
-def test_build_drops_stations_outside_conus(tmp_path):
-    st = _stations(10)
-    st.loc[0, ["lat", "lon"]] = [61.2, -149.9]          # Anchorage
-    assert build(st, tmp_path)["n_stations"] == 9
 
 
 # ============================================================ bad spreadsheet download

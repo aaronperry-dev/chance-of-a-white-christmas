@@ -4,7 +4,7 @@
   --ink: #e8eaed; --ink-2: #aab1b9; --ink-3: #7f8790;
   --accent: #9ecae1;
   --warn-bg: #3a2c05; --warn-ink: #ffd66b; --warn-line: #5c4608;
-  --water: #17191c;
+  --water: #101215;  --ctx: #23272c;  --ctx-line: rgba(255,255,255,.14);
   --border: rgba(255,255,255,.55);
   --lbl: #e3e7ec;  --halo: rgba(14,17,21,.92);
   --glass: rgba(18,20,23,.88);  --hover: #262b31;
@@ -17,7 +17,7 @@
   --ink: #14181d; --ink-2: #444c56; --ink-3: #5f6872;
   --accent: #1c5fa8;
   --warn-bg: #fff3cd; --warn-ink: #5c4300; --warn-line: #e6c75a;
-  --water: #e4e4e4;
+  --water: #e6e8eb;  --ctx: #c9ccd1;  --ctx-line: rgba(30,40,50,.25);
   --border: rgba(30,40,50,.6);
   --lbl: #1d242b;  --halo: rgba(255,255,255,.92);
   --glass: rgba(255,255,255,.92);  --hover: #eaeef2;
@@ -66,6 +66,7 @@ h1 { margin: 0 0 4px; font-size: 28px; line-height: 1.2; letter-spacing: -0.01em
 .chk input { accent-color: var(--accent); width: 16px; height: 16px; }
 .rng input { width: 96px; accent-color: var(--accent); vertical-align: middle; }
 .rng { margin-right: 10px; }
+.rng input:disabled { opacity: .4; }
 .tool-note { max-width: var(--page-max); margin: -4px auto 12px; padding: 0 20px; color: var(--ink-3); font-size: 12.5px; }
 .find { position: relative; margin-left: auto; }
 .find input { background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 7px 11px; width: 240px; font: inherit; font-size: 14px; }
@@ -133,6 +134,10 @@ h1 { margin: 0 0 4px; font-size: 28px; line-height: 1.2; letter-spacing: -0.01em
 .map-toggle:hover { background: var(--hover); }
 .map-toggle[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); font-weight: 600; }
 .map-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* our surface images (positioned by the page in projected coordinates) */
+.leaflet-container .wc-img { position: absolute; left: 0; top: 0; max-width: none !important; max-height: none !important;
+  pointer-events: none; user-select: none; image-rendering: auto; }
 
 /* map chrome */
 .leaflet-container { font: inherit; background: var(--water); }
