@@ -6,6 +6,8 @@ A static dashboard for GitHub Pages. It shows **NOAA's own map** of the historic
 * **Stations:** NOAA's public station layer behind that map (`Percent_da`, `ELEVATION`, `Years`), with the NCEI spreadsheet as a fallback. Used for the station dots (toggle them on the map or in the toolbar), search, click look-up ("nearest station"), the headline figures, and the "Stations by chance" table, which recalculates for whatever part of the map is in view. These figures are shares of **stations**, not land area.
 * **Legend:** NOAA's eight classes (0–10, 11–25, 26–40, 41–50, 51–60, 61–75, 76–90, 91–100 %). Swatch colours were sampled from NOAA's interactive-map legend and checked against the rendered tiles; edit `NOAA_COLORS` in `pipeline/config.py` if they ever differ.
 * **Light / Dark toggle:** changes the page, overlays and station markers. NOAA's tiles keep NOAA's colours in both themes (they are pre-rendered images).
+* **Wide map:** a toolbar switch moves the side cards under the map so it uses the full page width (remembered per browser).
+* **NOAA's own dots and names:** NOAA's rendered tiles draw their own station dots and city names at some zoom levels. They are part of NOAA's images, so the *Stations* / *Place labels* switches (which control this dashboard's own layers) cannot hide them.
 * **Optional overlays** (off by default): state lines and place labels from Natural Earth, in case you want them on top of NOAA's tiles.
 
 ```

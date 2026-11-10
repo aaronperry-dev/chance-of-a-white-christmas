@@ -19,6 +19,13 @@
   const css = (v) => getComputedStyle(root).getPropertyValue(v).trim();
   let theme = root.dataset.theme;
 
+  /* ---------- layout: wide map (cards under the map) is remembered ---------- */
+  const layoutEl = $('#layout');
+  let wide = false;
+  try { wide = localStorage.getItem('wc-wide') === '1'; } catch (e) { /* ignore */ }
+  layoutEl.classList.toggle('wide', wide);
+  $('#t-wide').checked = wide;
+
   /* ---------- load ---------- */
   let meta, stations;
   try {
@@ -67,10 +74,11 @@
   });
   L.control.attribution({ prefix: false }).addAttribution('NOAA NCEI 1991–2020 Normals · Climate.gov').addTo(map);
 
+  let fitZoom = 0;
   function fitView() {
     const [x0, y0, x1, y1] = meta.crs.extent, s = map.getSize();
     const resNeeded = Math.max((x1 - x0) / (s.x - 20), (y1 - y0) / (s.y - 20));
-    const z = Math.max(0, Math.floor(crs.zoom(1 / resNeeded) * 4) / 4);
+    const z = fitZoom = Math.max(0, Math.floor(crs.zoom(1 / resNeeded) * 4) / 4);
     map.setView(unproj((x0 + x1) / 2, (y0 + y1) / 2), z, { animate: false });
   }
   fitView();
@@ -307,6 +315,13 @@
   stationsBox.addEventListener('change', (e) => setStations(e.target.checked));
 
   /* ---------- toolbar ---------- */
+  $('#t-wide').addEventListener('change', (e) => {
+    layoutEl.classList.toggle('wide', e.target.checked);
+    try { localStorage.setItem('wc-wide', e.target.checked ? '1' : '0'); } catch (x) { /* ignore */ }
+    const showingAll = map.getZoom() <= fitZoom + 0.01;           // looking at the whole country?
+    map.invalidateSize({ pan: false });
+    if (showingAll) fitView();                                    // then use the new space; else keep the user's view
+  });
   const toggle = (id, layer) => $(id).addEventListener('change', (e) => { e.target.checked ? layer.addTo(map) : layer.remove(); });
   if (lineLayer) toggle('#t-lines', lineLayer);
   $('#t-labels').addEventListener('change', (e) => {

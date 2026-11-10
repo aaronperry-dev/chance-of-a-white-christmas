@@ -26,6 +26,7 @@
   color-scheme: light;
 }
 
+:root { --page-max: 1760px; }
 * { box-sizing: border-box; }
 body {
   margin: 0; background: var(--bg); color: var(--ink);
@@ -33,7 +34,7 @@ body {
 }
 a { color: var(--accent); }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-.page { max-width: 1280px; margin: 0 auto; padding: 0 20px; }
+.page { max-width: var(--page-max); margin: 0 auto; padding: 0 20px; }
 
 .head { padding-top: 22px; padding-bottom: 14px; display: flex; gap: 16px; align-items: flex-start; justify-content: space-between; }
 h1 { margin: 0 0 4px; font-size: 28px; line-height: 1.2; letter-spacing: -0.01em; }
@@ -53,18 +54,19 @@ h1 { margin: 0 0 4px; font-size: 28px; line-height: 1.2; letter-spacing: -0.01em
 .banner[hidden] { display: none; }
 
 /* KPI row */
-.kpis { max-width: 1280px; margin: 0 auto 16px; padding: 0 20px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.kpis { max-width: var(--page-max); margin: 0 auto 16px; padding: 0 20px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .tile { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 18px; }
 .hero { font-size: 48px; line-height: 1.05; font-weight: 650; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
 .tile .lbl { color: var(--ink-2); margin-top: 4px; font-size: 14px; }
 .tile .lbl b { color: var(--ink); font-weight: 600; }
 
 /* one filter row above the content it scopes */
-.toolbar { max-width: 1280px; margin: 0 auto 12px; padding: 0 20px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+.toolbar { max-width: var(--page-max); margin: 0 auto 12px; padding: 0 20px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
 .chk { display: inline-flex; align-items: center; gap: 7px; color: var(--ink-2); font-size: 14px; }
 .chk input { accent-color: var(--accent); width: 16px; height: 16px; }
 .rng input { width: 96px; accent-color: var(--accent); vertical-align: middle; }
 .rng { margin-right: 10px; }
+.tool-note { max-width: var(--page-max); margin: -4px auto 12px; padding: 0 20px; color: var(--ink-3); font-size: 12.5px; }
 .find { position: relative; margin-left: auto; }
 .find input { background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 7px 11px; width: 240px; font: inherit; font-size: 14px; }
 .find input::placeholder { color: var(--ink-3); }
@@ -75,9 +77,13 @@ h1 { margin: 0 0 4px; font-size: 28px; line-height: 1.2; letter-spacing: -0.01em
 #find-results .p { color: var(--ink-2); font-variant-numeric: tabular-nums; }
 
 /* layout */
-.layout { max-width: 1280px; margin: 0 auto; padding: 0 20px 8px; display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; align-items: start; }
+.layout { max-width: var(--page-max); margin: 0 auto; padding: 0 20px 8px; display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; align-items: start; }
 .mapwrap { position: relative; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--water); }
-#map { width: 100%; aspect-ratio: 1.5 / 1; min-height: 420px; max-height: 80vh; background: var(--water); }
+#map { width: 100%; height: clamp(520px, 78vh, 920px); background: var(--water); }
+/* wide map: the cards move under the map so it can use the full page width */
+.layout.wide { grid-template-columns: minmax(0, 1fr); }
+.layout.wide #map { height: clamp(560px, 84vh, 1000px); }
+.layout.wide .side { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
 .map-error { position: absolute; inset: 0; margin: 0; display: grid; place-items: center; text-align: center; padding: 24px; background: var(--water); color: var(--ink-2); }
 .map-error[hidden] { display: none; }
 
@@ -151,6 +157,8 @@ h1 { margin: 0 0 4px; font-size: 28px; line-height: 1.2; letter-spacing: -0.01em
 @media (max-width: 640px) { .legend { margin-bottom: 28px; } }
 @media (max-width: 960px) {
   .layout, .kpis { grid-template-columns: minmax(0, 1fr); }
+  .layout.wide .side { grid-template-columns: minmax(0, 1fr); }
+  .chk:has(#t-wide) { display: none; }
   .find { margin-left: 0; width: 100%; }
   .find input { width: 100%; }
   .hero { font-size: 40px; }

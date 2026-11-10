@@ -52,13 +52,15 @@
   <label class="chk"><input type="checkbox" id="t-stations"> Stations</label>
   <label class="chk"><input type="checkbox" id="t-lines"> State lines</label>
   <label class="chk"><input type="checkbox" id="t-labels"> Place labels</label>
+  <label class="chk"><input type="checkbox" id="t-wide"> Wide map</label>
   <div class="find">
     <input type="search" id="find" placeholder="Find a station…" autocomplete="off" aria-label="Find a station" aria-controls="find-results">
     <ul id="find-results" role="listbox" hidden></ul>
   </div>
 </section>
+<p class="tool-note">These switches control this dashboard’s own layers. NOAA’s map tiles also draw their own station dots and city names at some zoom levels; those are part of NOAA’s images and can’t be hidden here.</p>
 
-<main class="layout">
+<main class="layout" id="layout">
   <div class="mapwrap">
     <div id="map" aria-label="Map of the probability of a white Christmas. Click a point to see the nearest weather station."></div>
     <p id="map-error" class="map-error" hidden></p>
