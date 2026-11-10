@@ -1,5 +1,7 @@
-/* White Christmas dashboard. All data comes from ./data/* written by the Python pipeline.
- * Map CRS = ESRI:102009 (North America Lambert Conformal Conic), same as NOAA's web app. */
+/* White Christmas dashboard.
+ * The coloured surface is NOAA's own cached map service (ArcGIS tiles) drawn in its native
+ * tile grid and projection, ESRI:102009 (North America Lambert Conformal Conic).
+ * Everything else (stations, legend, optional state lines / labels) comes from ./data/*. */
 (async function () {
   'use strict';
 
@@ -12,167 +14,136 @@
     return n;
   };
   const getJSON = (u) => fetch(u).then((r) => { if (!r.ok) throw new Error(u + ' -> ' + r.status); return r.json(); });
+  const optional = (u) => getJSON(u).catch(() => null);
   const pct = (x, d = 0) => (100 * x).toFixed(d) + '%';
   const css = (v) => getComputedStyle(root).getPropertyValue(v).trim();
   let theme = root.dataset.theme;
 
   /* ---------- load ---------- */
-  let meta, stations, places, statesGJ, contextGJ;
+  let meta, stations;
   try {
-    [meta, stations, places, statesGJ, contextGJ] = await Promise.all([
-      getJSON('data/meta.json'), getJSON('data/stations.json'), getJSON('data/places.json'),
-      getJSON('data/states.geojson'), getJSON('data/context.geojson'),
-    ]);
+    [meta, stations] = await Promise.all([getJSON('data/meta.json'), getJSON('data/stations.json')]);
   } catch (err) {
     const box = $('#map-error');
     box.hidden = false;
     box.textContent = 'Map data not found. Run "python -m pipeline.build" (or let the GitHub Action run) to generate site/data/. ' + err.message;
     return;
   }
-
-  /* value grid for exact click look-ups (gzip uint8, 255 = no data); optional */
-  let values = null;
-  try {
-    if (!('DecompressionStream' in window)) throw new Error('DecompressionStream unavailable');
-    const r = await fetch('data/' + meta.values);
-    values = new Uint8Array(await new Response(r.body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer());
-  } catch (e) { console.warn('click look-up grid unavailable:', e.message); }
+  const [statesGJ, places] = await Promise.all([optional('data/states.geojson'), optional('data/places.json')]);
 
   /* ---------- static text ---------- */
   if (meta.synthetic) $('#demo-banner').hidden = false;
   $('#period').textContent = meta.period;
-  $('#palette').textContent = meta.palette;
   $('#built').textContent = 'Built ' + meta.built_utc + '.';
+  $('#credit').textContent = 'Map: ' + meta.tiles.attribution + '.';
   $('#kpi-ge50').textContent = pct(meta.stats.share_ge_50);
-  $('#kpi-lt10').textContent = pct(meta.stats.share_lt_10);
+  $('#kpi-le10').textContent = pct(meta.stats.share_le_10);
   $('#kpi-n').textContent = meta.n_stations.toLocaleString('en-US');
   if (meta.source && meta.source.url) $('#src-link').href = meta.source.url;
-  (function methodText() {
-    const g = meta.grid, e = meta.estimation;
-    let t = 'Station values are estimated on a ' + (g.res / 1000) + ' km grid in the map projection';
-    t += ' by inverse-distance weighting of the nearest stations';
-    if (e.cv) {
-      t += '. Leave-one-out check at the stations: RMSE ' + e.cv.rmse.toFixed(1) + ' percentage points' +
-        (meta.synthetic ? ' (synthetic data)' : '');
-    }
-    $('#method').textContent = t + '.';
-  })();
+  if (meta.tiles.service) $('#tiles-link').href = meta.tiles.service;
 
   /* ---------- class helpers ---------- */
   const classes = meta.classes;
-  const classIndex = (p) => { let i = 0; while (i < classes.length - 1 && p >= classes[i].hi) i++; return i; };
-  const colorOf = (p) => classes[classIndex(p)].colors[theme];
+  const classIndex = (p) => { let i = 0; while (i < classes.length - 1 && p > classes[i].hi) i++; return i; };  // upper edge inclusive
+  const colorOf = (p) => classes[classIndex(p)].color;
   const ft = (m) => Math.round(m * 3.28084);
 
-  /* ---------- CRS: ESRI:102009 ---------- */
-  const crs = new L.Proj.CRS(meta.crs.name, meta.crs.proj4, {
-    resolutions: meta.crs.resolutions, origin: [meta.crs.extent[0], meta.crs.extent[3]],
-  });
-  const g = meta.grid;
+  /* ---------- CRS: NOAA's tile grid ----------
+   * Leaflet zoom 0 is an extra, coarser level (2x the service's level 0) so the whole of the
+   * contiguous U.S. fits in a narrow window; its tiles are the service's level 0, scaled down.
+   * Leaflet zoom z = 1..5 is the service's level z-1. A last, finer step (zoom 6) is overzoom: the
+   * finest level scaled up 2x, so the view can go a little past what NOAA publishes. */
+  const T = meta.tiles;
+  const resolutions = [T.resolutions[0] * 2, ...T.resolutions, T.resolutions[T.resolutions.length - 1] / 2];
+  const crs = new L.Proj.CRS(meta.crs.name, meta.crs.proj4, { resolutions, origin: T.origin });
   const proj = (ll) => crs.projection.project(ll);
   const unproj = (x, y) => crs.projection.unproject(L.point(x, y));
 
   const map = L.map('map', {
     crs, zoomSnap: 0.25, zoomDelta: 0.5, wheelPxPerZoomLevel: 90,
-    minZoom: 1, maxZoom: 7, attributionControl: false,
+    minZoom: 0, maxZoom: resolutions.length - 1, attributionControl: false,
   });
-  L.control.attribution({ prefix: false })
-    .addAttribution('NOAA NCEI 1991–2020 Normals · Natural Earth')
-    .addTo(map);
+  L.control.attribution({ prefix: false }).addAttribution('NOAA NCEI 1991–2020 Normals · Climate.gov').addTo(map);
 
   function fitView() {
-    const s = map.getSize();
-    const resNeeded = Math.max((g.x1 - g.x0) / (s.x - 20), (g.y1 - g.y0) / (s.y - 20));
-    const z = Math.floor(crs.zoom(1 / resNeeded) * 4) / 4;
-    map.setView(unproj((g.x0 + g.x1) / 2, (g.y0 + g.y1) / 2), z, { animate: false });
+    const [x0, y0, x1, y1] = meta.crs.extent, s = map.getSize();
+    const resNeeded = Math.max((x1 - x0) / (s.x - 20), (y1 - y0) / (s.y - 20));
+    const z = Math.max(0, Math.floor(crs.zoom(1 / resNeeded) * 4) / 4);
+    map.setView(unproj((x0 + x1) / 2, (y0 + y1) / 2), z, { animate: false });
   }
   fitView();
 
-  /* keep panning inside NOAA's constraint extent (in LCC metres) */
+  /* keep panning inside NOAA's constraint extent (LCC metres) */
   map.on('moveend', () => {
     const c = proj(map.getCenter()), [x0, y0, x1, y1] = meta.crs.extent;
     const cx = Math.min(Math.max(c.x, x0), x1), cy = Math.min(Math.max(c.y, y0), y1);
     if (cx !== c.x || cy !== c.y) map.panTo(unproj(cx, cy));
   });
 
-  /* ---------- panes (stacking order) ---------- */
+  /* ---------- panes ---------- */
   const pane = (name, z) => { const p = map.createPane(name); p.style.zIndex = z; return p; };
-  pane('ctx', 200); pane('land', 210); pane('surface', 300);
   pane('lines', 400); pane('stations', 500);
   pane('labels', 650).style.pointerEvents = 'none';
 
-  /* ---------- image layer placed by its LCC corners (conic-safe) ----------
-   * Leaflet's ImageOverlay assumes an axis-aligned lat/lon rectangle, which is
-   * wrong in a conic projection; this positions the image by projected corners. */
-  const LccImage = L.ImageOverlay.extend({
-    initialize(url, ext, options) {
-      this._ext = ext;
-      L.ImageOverlay.prototype.initialize.call(this, url, [[0, 0], [1, 1]], options);
-    },
-    _tl() { return unproj(this._ext.x0, this._ext.y1); },
-    _br() { return unproj(this._ext.x1, this._ext.y0); },
-    _reset() {
-      const m = this._map, tl = m.latLngToLayerPoint(this._tl()), br = m.latLngToLayerPoint(this._br());
-      L.DomUtil.setPosition(this._image, tl);
-      this._image.style.width = (br.x - tl.x) + 'px';
-      this._image.style.height = (br.y - tl.y) + 'px';
-    },
-    _animateZoom(e) {
-      const m = this._map;
-      L.DomUtil.setTransform(this._image, m._latLngToNewLayerPoint(this._tl(), e.zoom, e.center), m.getZoomScale(e.zoom));
+  /* ---------- NOAA tiles ---------- */
+  const [fx0, fy0, fx1, fy1] = T.full_extent, ZOFF = -1;
+  const BLANK = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
+  const NoaaTiles = L.TileLayer.extend({
+    // only request tiles that exist in the service's cache (its full extent), so no 404 storm
+    _isValidTile(c) {
+      const res = T.resolutions[Math.max(0, c.z + ZOFF)], span = res * T.size;
+      return c.x >= Math.floor((fx0 - T.origin[0]) / span) && c.x <= Math.floor((fx1 - T.origin[0]) / span) &&
+             c.y >= Math.floor((T.origin[1] - fy1) / span) && c.y <= Math.floor((T.origin[1] - fy0) / span);
     },
   });
-
-  const surface = new LccImage('data/' + meta.overlay[theme], g, {
-    pane: 'surface', opacity: 0.8, interactive: false, alt: 'Probability of a white Christmas',
+  const noaa = new NoaaTiles(T.url, {
+    tileSize: T.size, zoomOffset: ZOFF, minNativeZoom: 1, maxNativeZoom: T.resolutions.length,
+    minZoom: 0, maxZoom: resolutions.length - 1, noWrap: true, errorTileUrl: BLANK, keepBuffer: 2, className: 'noaa-tiles',
   }).addTo(map);
 
-  /* ---------- vector context ---------- */
-  const ctxLayer = L.geoJSON(contextGJ, { renderer: L.svg({ pane: 'ctx' }), interactive: false }).addTo(map);
-  const landLayer = L.geoJSON(statesGJ, { renderer: L.svg({ pane: 'land' }), interactive: false }).addTo(map);
-  const lineLayer = L.geoJSON(statesGJ, { renderer: L.svg({ pane: 'lines' }), interactive: false }).addTo(map);
-
-  /* ---------- labels ---------- */
-  const labelLayer = L.layerGroup().addTo(map);
-  const cityMinZoom = [1, 1, 2.5, 3.5, 4.5];
+  /* ---------- optional vector overlays ---------- */
+  const lineLayer = statesGJ ? L.geoJSON(statesGJ, { renderer: L.svg({ pane: 'lines' }), interactive: false }) : null;
+  const labelLayer = L.layerGroup();
   const labelMarkers = [];
-  const mkLabel = (cls, text, lat, lon, minZoom) => {
-    const m = L.marker([lat, lon], { pane: 'labels', interactive: false, keyboard: false,
-      icon: L.divIcon({ className: '', iconSize: [0, 0], html: el('span', 'lbl ' + cls, text) }) });
-    m._minZoom = minZoom;
-    labelMarkers.push(m);
-  };
-  places.states.forEach((s) => mkLabel('state', s.t, s.la, s.lo, 3));
-  places.cities.forEach((c) => { if (c.us || c.r <= 1) mkLabel('city', c.n, c.la, c.lo, cityMinZoom[Math.min(c.r, 4)]); });
+  if (places) {
+    const cityMinZoom = [0.5, 0.5, 1.5, 2.5, 3.5];
+    const mkLabel = (cls, text, lat, lon, minZoom) => {
+      const m = L.marker([lat, lon], { pane: 'labels', interactive: false, keyboard: false,
+        icon: L.divIcon({ className: '', iconSize: [0, 0], html: el('span', 'lbl ' + cls, text) }) });
+      m._minZoom = minZoom;
+      labelMarkers.push(m);
+    };
+    places.states.forEach((s) => mkLabel('state', s.t, s.la, s.lo, 1));
+    places.cities.forEach((c) => { if (c.us || c.r <= 1) mkLabel('city', c.n, c.la, c.lo, cityMinZoom[Math.min(c.r, 4)]); });
+  }
+  let labelsOn = false;
   const syncLabels = () => labelMarkers.forEach((m) => {
-    const on = map.getZoom() >= m._minZoom;
+    const on = labelsOn && map.getZoom() >= m._minZoom;
     if (on && !labelLayer.hasLayer(m)) labelLayer.addLayer(m);
     if (!on && labelLayer.hasLayer(m)) labelLayer.removeLayer(m);
   });
-  map.on('zoomend', syncLabels); syncLabels();
+  map.on('zoomend', syncLabels);
+  if (!lineLayer) $('#t-lines').disabled = true;
+  if (!places) $('#t-labels').disabled = true;
 
-  /* ---------- station layer (canvas: thousands of points stay fast) ---------- */
+  /* ---------- station layer (canvas) ---------- */
   const canvas = L.canvas({ pane: 'stations', padding: 0.5 });
   const stationLayer = L.layerGroup();
   const tip = L.tooltip({ direction: 'top', offset: [0, -6] });
   const stationLabel = (s) => s.n + (s.s ? ', ' + s.s : '') + ' — ' + s.p + '%';
   const stationMarkers = stations.map((s) => {
-    const m = L.circleMarker([s.la, s.lo], {
-      renderer: canvas, radius: 4.5, weight: 1, opacity: 0.9, fillOpacity: 1, bubblingMouseEvents: false,
-    });
+    const m = L.circleMarker([s.la, s.lo], { renderer: canvas, radius: 4.5, weight: 1, opacity: 0.9, fillOpacity: 1, bubblingMouseEvents: false });
     m.on('mouseover', (e) => { tip.setContent(el('span', null, stationLabel(s))); tip.setLatLng(e.latlng); map.openTooltip(tip); });
     m.on('mouseout', () => map.closeTooltip(tip));
     m.on('click', () => selectStation(s, false));
     stationLayer.addLayer(m);
     return m;
   });
-
-  /* dots shrink when zoomed out so they don't bury the surface */
-  const dotRadius = () => { const z = map.getZoom(); return z < 2.5 ? 1.8 : z < 3.5 ? 2.8 : z < 4.5 ? 3.8 : 5; };
+  const dotRadius = () => { const z = map.getZoom(); return z < 1.25 ? 1.8 : z < 2.25 ? 2.8 : z < 3.25 ? 3.8 : 5; };
   const sizeDots = () => { const r = dotRadius(); stationMarkers.forEach((m) => m.setRadius(r)); };
   map.on('zoomend', sizeDots); sizeDots();
 
-  /* ---------- legend + class bars (re-rendered on theme change) ---------- */
+  /* ---------- legend + class bars ---------- */
   let legendEl = null;
   const Legend = L.Control.extend({
     options: { position: 'bottomleft' },
@@ -183,22 +154,22 @@
     legendEl.replaceChildren(el('div', 't', 'Chance of ≥1 in. snow on the ground, Dec 25'));
     const bar = el('div', 'bar'), ticks = el('div', 'ticks');
     classes.forEach((c, i) => {
-      const s = el('i'); s.style.background = c.colors[theme]; s.title = c.label; bar.append(s);
+      const s = el('i'); s.style.background = c.color; s.title = c.label; bar.append(s);
       ticks.append(el('span', null, i < classes.length - 1 ? String(c.hi) : ''));
     });
     legendEl.append(bar, ticks);
   }
   new Legend().addTo(map);
 
-  const shares = meta.stats.share_by_class, maxShare = Math.max(...shares);
+  const shares = meta.stats.share_by_class, maxShare = Math.max(...shares, 1e-9);
   function renderClasses() {
     const ul = $('#classes'), tb = $('#class-table tbody');
     ul.replaceChildren(); tb.replaceChildren();
     classes.forEach((c, i) => {
       const li = el('li'), sw = el('span', 'sw'), track = el('span', 'track'), bar = el('i');
-      sw.style.background = c.colors[theme];
+      sw.style.background = c.color;
       bar.style.width = (100 * shares[i] / maxShare).toFixed(1) + '%';
-      bar.style.background = c.colors[theme];
+      bar.style.background = c.color;
       track.append(bar);
       li.append(sw, el('span', 'rng-l', c.label), track, el('span', 'val', pct(shares[i], 1)));
       ul.append(li);
@@ -206,15 +177,7 @@
     });
   }
 
-  /* ---------- value look-up (exact, full grid resolution) ---------- */
-  function valueAt(latlng) {
-    if (!values) return undefined;
-    const p = proj(latlng);
-    const x = Math.floor((p.x - g.x0) / g.res), y = Math.floor((g.y1 - p.y) / g.res);
-    if (x < 0 || y < 0 || x >= g.nx || y >= g.ny) return null;
-    const v = values[y * g.nx + x];
-    return v === 255 ? null : v;
-  }
+  /* ---------- nearest station ---------- */
   function nearestStation(lat, lon) {
     const k = Math.cos((lat * Math.PI) / 180);
     let best = null, bd = Infinity;
@@ -235,56 +198,46 @@
     if (marker) marker.remove();
     marker = L.circleMarker(ll, { pane: 'stations', radius: 7, weight: 2, color: css('--ring'), fillColor: css('--card'), fillOpacity: 0.9, interactive: false }).addTo(map);
   }
-  function renderReadout(p, kind, lines) {
+  function renderReadout(s, lines) {
     const box = $('#readout');
     box.replaceChildren();
-    if (p === null || p === undefined) {
-      box.append(el('p', 'hint', p === null ? 'Outside the mapped contiguous U.S. surface.' : 'Click look-up is unavailable in this browser; stations still work.'));
-      for (const parts of lines) {
-        const d = el('div', 'read-meta');
-        parts.forEach((t, i) => d.append(i % 2 ? el('b', null, t) : document.createTextNode(t)));
-        box.append(d);
-      }
-      return;
-    }
     const top = el('div', 'read-top'), sw = el('span', 'sw');
-    sw.style.background = colorOf(p);
-    top.append(el('span', 'big', p + '%'), sw);
-    box.append(top, el('div', 'readout-kind', kind));
+    sw.style.background = colorOf(s.p);
+    top.append(el('span', 'big', s.p + '%'), sw);
+    box.append(top, el('div', 'readout-kind', meta.synthetic ? 'Synthetic demo value (not NOAA data)' : 'Chance of ≥1 in. snow on the ground, Dec 25'));
     for (const parts of lines) {
       const d = el('div', 'read-meta');
       parts.forEach((t, i) => d.append(i % 2 ? el('b', null, t) : document.createTextNode(t)));
       box.append(d);
     }
   }
+  const stationName = (s) => s.n + (s.s ? ', ' + s.s : '');
+  const stationFacts = (s) => {
+    const lines = [];
+    if (s.e !== null) lines.push(['Elevation: ', ft(s.e).toLocaleString('en-US') + ' ft (' + Math.round(s.e).toLocaleString('en-US') + ' m)', '']);
+    if (s.y) lines.push(['Years of record: ', String(s.y), '']);
+    return lines;
+  };
   function selectPoint(ll) {
     last = { type: 'point', ll };
     setMarker(ll);
-    const n = nearestStation(ll.lat, ll.lng), lines = [];
-    if (n) lines.push(['Nearest station: ', n.s.n + (n.s.s ? ', ' + n.s.s : ''), ' — ' + n.mi.toFixed(0) + ' mi away, ' + n.s.p + '%']);
-    lines.push(['Location: ', ll.lat.toFixed(2) + '°, ' + ll.lng.toFixed(2) + '°', '']);
-    renderReadout(valueAt(ll), 'Estimated surface value', lines);
+    const n = nearestStation(ll.lat, ll.lng);
+    if (!n) return;
+    renderReadout(n.s, [['Station: ', stationName(n.s), ' — ' + n.mi.toFixed(0) + ' mi from the point you clicked'], ...stationFacts(n.s)]);
   }
   function selectStation(s, fly) {
     last = { type: 'station', s };
     setMarker(L.latLng(s.la, s.lo));
-    if (fly) map.flyTo([s.la, s.lo], Math.max(map.getZoom(), 4.5), { duration: 0.8 });
-    const lines = [['Station: ', s.n + (s.s ? ', ' + s.s : ''), '']];
-    if (s.e !== null) lines.push(['Elevation: ', ft(s.e).toLocaleString('en-US') + ' ft (' + Math.round(s.e).toLocaleString('en-US') + ' m)', '']);
-    if (s.y) lines.push(['Years of record: ', String(s.y), '']);
-    lines.push(['ID: ', s.id, '']);
-    renderReadout(s.p, meta.synthetic ? 'Synthetic demo value (not NOAA data)' : 'Station value from NOAA normals', lines);
+    if (fly) map.flyTo([s.la, s.lo], Math.max(map.getZoom(), 4), { duration: 0.8 });
+    renderReadout(s, [['Station: ', stationName(s), ''], ...stationFacts(s), ['ID: ', s.id, '']]);
   }
   map.on('click', (e) => selectPoint(e.latlng));
 
-  /* ---------- theme ---------- */
+  /* ---------- theme (page chrome and overlays; NOAA's tiles keep NOAA's colours) ---------- */
   function paint() {
     root.dataset.theme = theme;
     document.querySelectorAll('[data-theme-set]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.themeSet === theme)));
-    surface.setUrl('data/' + meta.overlay[theme]);
-    landLayer.setStyle({ stroke: false, fill: true, fillColor: css('--land'), fillOpacity: 1 });
-    ctxLayer.setStyle({ stroke: true, color: css('--ctx-border'), weight: 0.8, fill: true, fillColor: css('--ctx'), fillOpacity: 1 });
-    lineLayer.setStyle({ stroke: true, color: css('--border'), weight: 0.8, fill: false, lineJoin: 'round' });
+    if (lineLayer) lineLayer.setStyle({ stroke: true, color: css('--border'), weight: 0.9, fill: false, lineJoin: 'round' });
     stationMarkers.forEach((m, i) => m.setStyle({ fillColor: colorOf(stations[i].p), color: css('--ring') }));
     renderLegend(); renderClasses();
     if (last) { last.type === 'point' ? selectPoint(last.ll) : selectStation(last.s, false); }
@@ -301,15 +254,20 @@
   paint();
 
   /* ---------- toolbar ---------- */
-  $('#t-surface').addEventListener('change', (e) => { e.target.checked ? surface.addTo(map) : surface.remove(); });
-  $('#t-stations').addEventListener('change', (e) => { e.target.checked ? stationLayer.addTo(map) : stationLayer.remove(); });
-  $('#opacity').addEventListener('input', (e) => surface.setOpacity(e.target.value / 100));
+  const toggle = (id, layer) => $(id).addEventListener('change', (e) => { e.target.checked ? layer.addTo(map) : layer.remove(); });
+  toggle('#t-stations', stationLayer);
+  if (lineLayer) toggle('#t-lines', lineLayer);
+  $('#t-labels').addEventListener('change', (e) => {
+    labelsOn = e.target.checked;
+    labelsOn ? labelLayer.addTo(map) : labelLayer.remove();
+    syncLabels();
+  });
 
   /* station search */
   const input = $('#find'), list = $('#find-results');
   let active = -1;
   const closeList = () => { list.hidden = true; list.replaceChildren(); active = -1; input.removeAttribute('aria-activedescendant'); };
-  const choose = (s) => { closeList(); input.value = s.n + (s.s ? ', ' + s.s : ''); selectStation(s, true); };
+  const choose = (s) => { closeList(); input.value = stationName(s); selectStation(s, true); };
   input.addEventListener('input', () => {
     const q = input.value.trim().toLowerCase();
     closeList();
@@ -318,7 +276,7 @@
     for (const s of stations) { if ((s.n + ' ' + s.s).toLowerCase().includes(q)) { hits.push(s); if (hits.length === 8) break; } }
     hits.forEach((s, i) => {
       const li = el('li'); li.id = 'fr-' + i; li.setAttribute('role', 'option');
-      li.append(el('span', null, s.n + (s.s ? ', ' + s.s : '')), el('span', 'p', s.p + '%'));
+      li.append(el('span', null, stationName(s)), el('span', 'p', s.p + '%'));
       li.addEventListener('mousedown', (ev) => { ev.preventDefault(); choose(s); });
       list.append(li);
     });
@@ -338,5 +296,5 @@
   });
   input.addEventListener('blur', () => setTimeout(closeList, 120));
 
-  window.__wc = { map, crs, meta, valueAt };   // handy for debugging / tests
+  window.__wc = { map, crs, meta, noaa, proj, unproj };   // handy for debugging / tests
 })();

@@ -1,8 +1,8 @@
-"""Central configuration: data sources, projection, grid, estimation and colour ramps.
+"""Central configuration: data sources, NOAA's tile service, projection and legend.
 
-Everything the front end needs (projection, class edges, colours, labels) is
-written to ``site/data/meta.json`` from here, so this file is the single source
-of truth for the map and the legend.
+Everything the front end needs (tile grid, projection, legend classes and colours)
+is written to ``site/data/meta.json`` from here, so this file is the single
+source of truth for the map and the legend.
 """
 from __future__ import annotations
 
@@ -42,50 +42,47 @@ NON_CONUS = {
 # Station / polygon sanity box (west, south, east, north), degrees.
 CONUS_BBOX = (-125.0, 24.0, -66.5, 49.8)
 
-# --- Projection: the same one NOAA's web app uses -----------------------------
+# --- Projection: the same one NOAA's web app and tile service use -----------
 # ESRI:102009 "North America Lambert Conformal Conic" (WKID 102009).
 LCC_NAME = "ESRI:102009"
 LCC_PROJ = ("+proj=lcc +lat_0=40 +lon_0=-96 +lat_1=20 +lat_2=60 "
             "+x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs")
-LCC_STD_PARALLELS = (20.0, 60.0)
 # NOAA app's constraint extent in LCC metres (xmin, ymin, xmax, ymax). Used to
-# frame and limit panning so the view matches theirs.
+# frame the view and limit panning.
 NOAA_EXTENT = (-3100465.28, -1958797.37, 2987609.40, 1618376.45)
-# Zoom ladder for the web map: metres per screen pixel at zoom 0..N.
-CRS_RESOLUTIONS = [16384 / 2 ** i for i in range(9)]  # 16384 ... 64
 
-# --- Grid --------------------------------------------------------------------
-GRID_RES_M = 1000    # pixel size in metres (NOAA's finest service tiles are ~500 m/px)
-GRID_PAD_M = 20_000  # margin around CONUS
+# --- NOAA's cached map service (the map you see is NOAA's own rendering) ------
+# ArcGIS "Christmas_Snow_2020normals_Lambert_update" MapServer (TilesOnly, 256 px PNG).
+# Values below are copied from the service's own metadata page (tileInfo / fullExtent).
+TILES_URL = ("https://tiles.arcgis.com/tiles/C8EMgrsFcRFL6LrL/arcgis/rest/services/"
+             "Christmas_Snow_2020normals_Lambert_update/MapServer/tile/{z}/{y}/{x}")
+TILES_SERVICE_PAGE = ("https://tiles.arcgis.com/tiles/C8EMgrsFcRFL6LrL/arcgis/rest/services/"
+                      "Christmas_Snow_2020normals_Lambert_update/MapServer")
+TILE_SIZE = 256
+TILE_ORIGIN = (-3.873557170374695e7, 4.6658285798503935e7)   # top-left of the tile grid (LCC m)
+TILE_RESOLUTIONS = [6879.180425027517, 3439.5902125137586, 1984.3789687579376,
+                    992.1894843789688, 496.0947421894844]    # metres/pixel for LOD 0..4
+TILE_FULL_EXTENT = (-8918789.413932372, -6520590.090497846, 9364286.214718886, 4874706.13759461)
+TILE_ATTRIBUTION = ("NOAA, Oceanic and Atmospheric Research (OAR), Climate Program Office (CPO), "
+                    "Climate.gov; NOAA National Centers for Environmental Information (NCEI)")
 
-# --- Estimation --------------------------------------------------------------
-# Plain inverse-distance weighting over the K nearest stations.
-IDW_K = 16
-IDW_POWER = 2.0
-IDW_EPS_M = 5000.0
-
-# --- Colour ramp -------------------------------------------------------------
-# ColorBrewer "Blues", 9-class sequential (colorbrewer2.org; Brewer, Harrower
-# and The Pennsylvania State University; Apache-2.0).
-PALETTE_NAME = "ColorBrewer Blues (9-class, sequential)"
-BLUES_9 = [
-    "#f7fbff", "#deebf7", "#c6dbef", "#9ecae1", "#6baed6",
-    "#4292c6", "#2171b5", "#08519c", "#08306b",
-]
-# Colours are listed LOW -> HIGH probability (class 0 = lowest chance).
-#   light theme: textbook direction - low chance = palest, high chance = darkest.
-#   dark theme : anchor flipped so high chance glows near-white on a dark map
-#                (also NOAA's own white = >90 % convention) and low chance
-#                recedes into the dark base.
-THEME_COLORS = {"light": list(BLUES_9), "dark": BLUES_9[::-1]}
-
-CLASS_EDGES = [10, 20, 30, 40, 50, 60, 70, 80]  # 9 classes, lower edge inclusive
-assert len(CLASS_EDGES) + 1 == len(BLUES_9)
+# --- Legend (NOAA's 8 classes) -------------------------------------------------
+# Labels and breaks follow NOAA's maps: 0-10, 11-25, 26-40, 41-50, 51-60, 61-75, 76-90, 91-100 %.
+# Swatch colours were sampled from NOAA's published 1991-2020 figure
+# (WhiteChristmas_1991-2020normals_2480px_nostatelabels). The map itself is NOAA's tiles, so
+# if the swatches ever look different from the tiles, edit this list.
+CLASS_UPPER_EDGES = [10, 25, 40, 50, 60, 75, 90]          # a class includes its upper edge
+NOAA_COLORS = ["#5f5f5f", "#636f85", "#5575a8", "#5b8dc8", "#72a2d0", "#95b6d7", "#bbc9d6", "#ebebeb"]
+assert len(CLASS_UPPER_EDGES) + 1 == len(NOAA_COLORS)
 
 
 def class_labels() -> list[str]:
-    e = CLASS_EDGES
-    labels = [f"<{e[0]}%"]
-    labels += [f"{lo}–{hi}%" for lo, hi in zip(e[:-1], e[1:])]
-    labels.append(f"≥{e[-1]}%")
-    return labels
+    e = CLASS_UPPER_EDGES
+    lo = [0] + [x + 1 for x in e]
+    hi = e + [100]
+    return [f"{a}\u2013{b}%" for a, b in zip(lo, hi)]
+
+
+def class_index(p: float) -> int:
+    """0..7. 10 -> class 0, 10.5 -> class 1, 25 -> class 1, 91 -> class 7."""
+    return sum(p > e for e in CLASS_UPPER_EDGES)

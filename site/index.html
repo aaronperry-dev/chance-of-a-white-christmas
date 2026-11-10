@@ -36,22 +36,22 @@
 <section class="kpis" aria-label="Headline figures">
   <div class="tile">
     <div class="hero" id="kpi-ge50">–</div>
-    <div class="lbl">of CONUS land area has a <b>50% or better</b> chance</div>
+    <div class="lbl">of weather stations have a <b>50% or better</b> chance</div>
   </div>
   <div class="tile">
-    <div class="hero" id="kpi-lt10">–</div>
-    <div class="lbl">of CONUS land area has <b>under a 10%</b> chance</div>
+    <div class="hero" id="kpi-le10">–</div>
+    <div class="lbl">of weather stations have a <b>10% or lower</b> chance</div>
   </div>
   <div class="tile">
     <div class="hero" id="kpi-n">–</div>
-    <div class="lbl">weather stations behind the map</div>
+    <div class="lbl">weather stations in NOAA’s dataset</div>
   </div>
 </section>
 
 <section class="toolbar" aria-label="Map controls">
-  <label class="chk"><input type="checkbox" id="t-surface" checked> Probability</label>
-  <label class="rng"><span class="sr">Probability opacity</span><input type="range" id="opacity" min="30" max="100" value="80" aria-label="Probability layer opacity"></label>
   <label class="chk"><input type="checkbox" id="t-stations"> Stations</label>
+  <label class="chk"><input type="checkbox" id="t-lines"> State lines</label>
+  <label class="chk"><input type="checkbox" id="t-labels"> Place labels</label>
   <div class="find">
     <input type="search" id="find" placeholder="Find a station…" autocomplete="off" aria-label="Find a station" aria-controls="find-results">
     <ul id="find-results" role="listbox" hidden></ul>
@@ -60,38 +60,37 @@
 
 <main class="layout">
   <div class="mapwrap">
-    <div id="map" aria-label="Map of the probability of a white christmas. Click a point to read its value."></div>
+    <div id="map" aria-label="Map of the probability of a white Christmas. Click a point to see the nearest weather station."></div>
     <p id="map-error" class="map-error" hidden></p>
   </div>
 
   <aside class="side">
     <section class="card" aria-labelledby="h-read">
-      <h2 id="h-read">At this point</h2>
+      <h2 id="h-read">Nearest station</h2>
       <div id="readout" aria-live="polite">
-        <p class="hint">Click anywhere on the map, or pick a station, to read the probability there.</p>
+        <p class="hint">Click anywhere on the map, or search for a station, to see its chance of a white Christmas.</p>
       </div>
     </section>
 
     <section class="card" aria-labelledby="h-area">
-      <h2 id="h-area">Land area by probability</h2>
+      <h2 id="h-area">Stations by chance</h2>
       <ul id="classes" class="classes"></ul>
       <details class="tableview">
         <summary>Table view</summary>
         <table id="class-table">
-          <thead><tr><th scope="col">Chance</th><th scope="col">Share of CONUS area</th></tr></thead>
+          <thead><tr><th scope="col">Chance</th><th scope="col">Share of stations</th></tr></thead>
           <tbody></tbody>
         </table>
       </details>
-      <p class="note">True-area-weighted share of the estimated surface.</p>
+      <p class="note">Share of the weather stations in each class — not land area.</p>
     </section>
   </aside>
 </main>
 
 <footer class="page foot">
-  <p><strong>Source.</strong> NOAA National Centers for Environmental Information — station probabilities from the 1991–2020 U.S. Climate Normals (the data behind NOAA’s “Historic probability of at least 1 inch of snow on December 25” map). <a id="src-link" href="https://www.ncei.noaa.gov/media/3501">NCEI station spreadsheet</a> · <a href="data/stations.csv">stations.csv</a></p>
-  <p><strong>Projection.</strong> North America Lambert Conformal Conic (ESRI:102009), the same projection as NOAA’s interactive map.</p>
-  <p><strong>Method.</strong> <span id="method">Station values are interpolated to a grid.</span> This surface is this dashboard’s own estimate, not NOAA’s thin-plate-spline surface. Climatology is not a forecast; check <a href="https://www.weather.gov/">weather.gov</a> within a week of the holiday.</p>
-  <p><strong>Credits.</strong> <span id="palette">ColorBrewer Blues</span> (Brewer, colorbrewer2.org). Boundaries and places: Natural Earth. <span id="built"></span></p>
+  <p><strong>Map.</strong> The colored surface is NOAA’s own rendering of the 1991–2020 normals, served from NOAA’s <a id="tiles-link" href="https://tiles.arcgis.com/tiles/C8EMgrsFcRFL6LrL/arcgis/rest/services/Christmas_Snow_2020normals_Lambert_update/MapServer">Christmas_Snow_2020normals_Lambert_update</a> map service in its native projection (North America Lambert Conformal Conic, ESRI:102009). NOAA publishes five zoom levels; the finest is about 500&nbsp;m per pixel.</p>
+  <p><strong>Stations.</strong> Dots, search and click look-ups use the station values behind that map from NOAA NCEI (<a id="src-link" href="https://www.ncei.noaa.gov/media/3501">source</a> · <a href="data/stations.csv">stations.csv</a>). A click shows the nearest station, not an interpolated value. Climatology is not a forecast; check <a href="https://www.weather.gov/">weather.gov</a> within a week of the holiday.</p>
+  <p><strong>Credits.</strong> <span id="credit"></span> State lines and place labels (optional layers): Natural Earth. <span id="built"></span></p>
 </footer>
 
 <script src="vendor/leaflet/leaflet.js"></script>

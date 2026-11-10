@@ -1,124 +1,65 @@
 """Pipeline tests.
 
 Fixtures are SYNTHETIC. The ArcGIS records mirror the live layer's shape (three real
-records captured from it), the Excel files only mimic a plausible layout, and the
-terrain tiles are generated - nothing here is NOAA/AWS data, and no test touches the network.
+records captured from it) and the Excel files only mimic a plausible layout. Nothing here is
+NOAA data and no test touches the network.
 """
-import base64
-import gzip
 import json
 
 import numpy as np
 import pandas as pd
 import pytest
-from PIL import Image
 
 from pipeline import config as C
 from pipeline import stations_arcgis as SA
-from pipeline.build import build
-from pipeline.geo import LccGrid, lonlat_to_xy, scale_factor, xy_to_lonlat
-from pipeline.grid import classify, project_polygons, rasterize_mask
-from pipeline.render import area_stats
+from pipeline.build import build, station_stats
 from pipeline.stations import StationFormatError, load_stations
-from pipeline.interp import Estimator, interpolate_grid, loo_cv
 from pipeline.webvec import rdp
 
-# a lon/lat rectangle comfortably inside CONUS
-RECT = [[np.array([[-104, 35], [-90, 35], [-90, 45], [-104, 45], [-104, 35]], dtype=float)]]
+
+# ============================================================ legend
+def test_legend_matches_noaa_classes():
+    assert C.class_labels() == ["0\u201310%", "11\u201325%", "26\u201340%", "41\u201350%",
+                                "51\u201360%", "61\u201375%", "76\u201390%", "91\u2013100%"]
+    assert len(C.NOAA_COLORS) == 8 and all(c.startswith("#") and len(c) == 7 for c in C.NOAA_COLORS)
 
 
-# ============================================================ config
-def test_palette_and_themes():
-    assert len(C.BLUES_9) == len(C.CLASS_EDGES) + 1 == len(C.class_labels()) == 9
-    assert C.THEME_COLORS["light"][0] == "#f7fbff" and C.THEME_COLORS["light"][-1] == "#08306b"
-    assert C.THEME_COLORS["dark"] == C.THEME_COLORS["light"][::-1]          # anchor flipped
-    r = C.CRS_RESOLUTIONS
-    assert all(r[i] == pytest.approx(2 * r[i + 1]) for i in range(len(r) - 1))
+def test_class_index_upper_edge_is_inclusive():
+    cases = {0: 0, 10: 0, 10.5: 1, 11: 1, 25: 1, 25.1: 2, 40: 2, 50: 3, 60: 4, 75: 5, 90: 6, 91: 7, 100: 7}
+    assert {p: C.class_index(p) for p in cases} == cases
 
 
-# ============================================================ projection (ESRI:102009)
+def test_station_stats_shares():
+    s = station_stats(np.array([0, 10, 11, 50, 50, 95, 100, 20.0]))
+    assert s["basis"] == "stations" and s["n"] == 8
+    assert sum(s["share_by_class"]) == pytest.approx(1.0)
+    assert s["share_ge_50"] == pytest.approx(4 / 8) and s["share_le_10"] == pytest.approx(2 / 8)
+
+
+# ============================================================ NOAA tile grid / projection
+def test_tile_grid_matches_service_metadata():
+    # ArcGIS: resolution = scale * 0.0254 / 96 (96 dpi) to within ~2 ppm (it uses a slightly different inch);
+    # the scales are the service's published LOD scales
+    scales = [2.6e7, 1.3e7, 7.5e6, 3.75e6, 1.875e6]
+    assert C.TILE_RESOLUTIONS == pytest.approx([s * 0.0254 / 96 for s in scales], rel=1e-5)
+    assert C.TILE_SIZE == 256 and len(C.TILE_RESOLUTIONS) == 5
+    # the app's view extent sits inside what the service actually caches
+    x0, y0, x1, y1 = C.NOAA_EXTENT
+    fx0, fy0, fx1, fy1 = C.TILE_FULL_EXTENT
+    assert fx0 <= x0 and fy0 <= y0 and x1 <= fx1 and y1 <= fy1
+    # and every cached tile row/col is positive in the service's grid (origin is top-left)
+    span = C.TILE_RESOLUTIONS[0] * C.TILE_SIZE
+    assert (fx0 - C.TILE_ORIGIN[0]) / span > 0 and (C.TILE_ORIGIN[1] - fy1) / span > 0
+    assert "{z}" in C.TILES_URL and "{y}" in C.TILES_URL and "{x}" in C.TILES_URL
+
+
 def test_lcc_matches_noaa_projection_definition():
+    from pyproj import Transformer
     assert "+lat_0=40" in C.LCC_PROJ and "+lon_0=-96" in C.LCC_PROJ
     assert "+lat_1=20" in C.LCC_PROJ and "+lat_2=60" in C.LCC_PROJ
-    x, y = lonlat_to_xy(-96.0, 40.0)                      # origin of the projection
-    assert (float(x), float(y)) == pytest.approx((0, 0), abs=1e-6)
-    x, y = lonlat_to_xy(-122.3, 47.6)                     # Seattle (also checked in the browser)
-    assert (float(x), float(y)) == pytest.approx((-1841985, 1074564), abs=3)
-    lon, lat = xy_to_lonlat(x, y)
-    assert (float(lon), float(lat)) == pytest.approx((-122.3, 47.6), abs=1e-6)
-
-
-def test_scale_factor_is_one_on_standard_parallels():
-    assert scale_factor(20.0) == pytest.approx(1.0, abs=1e-9)
-    assert scale_factor(60.0) == pytest.approx(1.0, abs=1e-9)
-    assert 0.9 < float(scale_factor(40.0)) < 1.0          # between the parallels: map is "too small"
-    assert float(scale_factor(30.0)) < 1.0 and float(scale_factor(75.0)) > 1.0
-
-
-def test_grid_geometry():
-    g = LccGrid.from_extent(-2_000_050, -1_000_020, 1_000_010, 1_000_030, 1000)
-    assert g.x0 % 1000 == 0 and g.y1 % 1000 == 0
-    assert g.x1 >= 1_000_010 and g.y0 <= -1_000_020
-    px, py = g.to_pixel(g.x0, g.y1)
-    assert (float(px), float(py)) == (0.0, 0.0)
-    x, y = g.pixel_xy(0, 0)
-    assert (float(x), float(y)) == (g.x0 + 500, g.y1 - 500)
-    assert np.all(np.diff(g.y_centers()) < 0) and np.all(np.diff(g.x_centers()) > 0)
-
-
-def test_mask_coverage_inside_outside_and_antialiased_edge():
-    proj = project_polygons(RECT)
-    xs = np.concatenate([r[:, 0] for p in proj for r in p]); ys = np.concatenate([r[:, 1] for p in proj for r in p])
-    g = LccGrid.from_extent(xs.min() - 50_000, ys.min() - 50_000, xs.max() + 50_000, ys.max() + 50_000, 5000)
-    cov = rasterize_mask(g, proj)
-    cx, cy = lonlat_to_xy(-97, 40)
-    px, py = g.to_pixel(cx, cy)
-    assert cov[int(py), int(px)] == pytest.approx(1.0)
-    assert cov[0, 0] == 0.0
-    assert ((cov > 0) & (cov < 1)).any()
-
-
-def test_classify_edges_are_lower_inclusive():
-    v = np.array([0, 9.99, 10, 19.99, 20, 79.9, 80, 100, np.nan])
-    assert classify(v, C.CLASS_EDGES).tolist() == [0, 0, 1, 1, 2, 7, 8, 8, -1]
-
-
-# ============================================================ estimator
-def _world(n=300, seed=2):
-    rng = np.random.default_rng(seed)
-    x, y = rng.uniform(0, 900_000, n), rng.uniform(0, 900_000, n)
-    p = np.clip(50 + 40 * np.sin(x / 200_000) * np.cos(y / 250_000) + rng.normal(0, 3, n), 1, 99)
-    return x, y, np.round(p)
-
-
-def test_estimator_constant_field_and_bounds():
-    x, y, _ = _world(120)
-    out = Estimator(x, y, np.full(len(x), 42.0)).predict(np.array([450_000.0, 100_000]), np.array([450_000.0, 800_000]))
-    assert np.allclose(out, 42.0, atol=1e-6)
-    p = np.random.default_rng(0).uniform(0, 100, len(x))
-    out = Estimator(x, y, p).predict(*np.random.default_rng(1).uniform(0, 9e5, (2, 300)))
-    assert out.min() >= 0 and out.max() <= 100                       # weighted mean never leaves the data range
-
-
-def test_estimator_is_close_to_station_value_at_a_station():
-    x, y, p = _world(300)
-    pred = Estimator(x, y, p).predict(x, y)
-    # a station's own weight dominates (softening distance 5 km vs ~50 km to the next station)
-    assert np.median(np.abs(pred - p)) < 1.0
-
-
-def test_loo_cv_reports_sane_errors():
-    x, y, p = _world(400)
-    cv = loo_cv(x, y, p)
-    assert cv["n"] == 400 and 0 < cv["mae"] <= cv["rmse"] < 25
-
-
-def test_interpolate_grid_only_fills_requested_pixels():
-    x, y, p = _world(200)
-    g = LccGrid.from_extent(0, 0, 900_000, 900_000, 30_000)
-    where = np.zeros((g.ny, g.nx), bool); where[5:10, 5:10] = True
-    out = interpolate_grid(Estimator(x, y, p), g, where)
-    assert np.isnan(out[~where]).all() and np.isfinite(out[where]).all()
+    t = Transformer.from_crs("EPSG:4326", C.LCC_PROJ, always_xy=True)
+    assert t.transform(-96.0, 40.0) == pytest.approx((0, 0), abs=1e-6)
+    assert t.transform(-122.3, 47.6) == pytest.approx((-1841985, 1074564), abs=3)   # Seattle (also checked in the browser)
 
 
 # ============================================================ NOAA feature layer
@@ -250,17 +191,6 @@ def test_xlsx_fractions_blanks_and_ambiguity(tmp_path):
         load_stations(p4)
 
 
-# ============================================================ stats / vectors
-def test_area_stats_uses_true_area_weights():
-    g = LccGrid.from_extent(-1_500_000, -1_000_000, 1_500_000, 1_000_000, 10_000)
-    cov = np.ones((g.ny, g.nx), np.float32)
-    values = np.tile(np.linspace(0, 100, g.nx, dtype=np.float32), (g.ny, 1))
-    s = area_stats(values, classify(values, C.CLASS_EDGES), cov, g, 9)
-    assert sum(s["share_by_class"]) == pytest.approx(1.0, abs=1e-3)
-    assert s["share_ge_50"] == pytest.approx(0.5, abs=0.03)
-    assert s["land_area_km2"] > 0
-
-
 def test_rdp_simplifies_but_keeps_shape():
     t = np.linspace(0, 10, 200)
     line = np.column_stack([t, np.zeros_like(t)])
@@ -279,39 +209,28 @@ def _stations(n=120, seed=1):
 
 
 def test_build_writes_consistent_assets(tmp_path):
-    meta = build(_stations(), RECT, tmp_path, res=10_000, synthetic=True, source={"name": "t"})
-    for f in ["overlay_light.png", "overlay_dark.png", "values.bin.gz", "stations.json", "stations.csv", "meta.json"]:
+    meta = build(_stations(), tmp_path, synthetic=True, source={"name": "t"})
+    for f in ["stations.json", "stations.csv", "meta.json"]:
         assert (tmp_path / f).stat().st_size > 0, f
-    assert not list(tmp_path.glob("relief*"))                          # no terrain layer any more
-    g = meta["grid"]
-    for f in ("overlay_light.png", "overlay_dark.png"):
-        assert Image.open(tmp_path / f).size == (g["nx"], g["ny"])
-    assert len(gzip.decompress((tmp_path / "values.bin.gz").read_bytes())) == g["nx"] * g["ny"]
-    assert meta["estimation"]["method"] == "idw" and meta["estimation"]["cv"]["n"] == 120
-    assert "relief" not in meta
-    assert meta["crs"]["name"] == "ESRI:102009"
-    assert len(meta["classes"]) == 9 and set(meta["classes"][0]["colors"]) == {"light", "dark"}
-    assert sum(meta["stats"]["share_by_class"]) == pytest.approx(1.0, abs=1e-3)
-    assert len(json.loads((tmp_path / "stations.json").read_text())) == 120
+    assert not list(tmp_path.glob("*.png")) and not list(tmp_path.glob("*.bin.gz"))   # NOAA's tiles are the map
+    assert meta["crs"]["name"] == "ESRI:102009" and meta["tiles"]["url"] == C.TILES_URL
+    assert meta["tiles"]["origin"] == list(C.TILE_ORIGIN) and len(meta["tiles"]["resolutions"]) == 5
+    assert len(meta["classes"]) == 8 and meta["classes"][0]["hi"] == 10 and meta["classes"][-1]["hi"] == 100
+    assert sum(meta["stats"]["share_by_class"]) == pytest.approx(1.0, abs=1e-9)
+    recs = json.loads((tmp_path / "stations.json").read_text())
+    assert len(recs) == 120 and meta == json.loads((tmp_path / "meta.json").read_text())
 
 
 def test_build_tolerates_stations_without_elevation(tmp_path):
-    meta = build(_stations().drop(columns="elev_m"), RECT, tmp_path, res=10_000, synthetic=True)
+    meta = build(_stations().drop(columns="elev_m"), tmp_path, synthetic=True)
     recs = json.loads((tmp_path / "stations.json").read_text())
     assert meta["n_stations"] == 120 and all(r["e"] is None for r in recs)
 
 
-def test_build_overlays_are_per_theme_recolours_of_the_same_classes(tmp_path):
-    build(_stations(), RECT, tmp_path, res=10_000, synthetic=True)
-    light = np.asarray(Image.open(tmp_path / "overlay_light.png"))
-    dark = np.asarray(Image.open(tmp_path / "overlay_dark.png"))
-    assert (light[..., 3] == dark[..., 3]).all()                       # identical footprint
-    lut = {tuple(int(h[i:i + 2], 16) for i in (1, 3, 5)): k for k, h in enumerate(C.THEME_COLORS["light"])}
-    inv = {tuple(int(h[i:i + 2], 16) for i in (1, 3, 5)): k for k, h in enumerate(C.THEME_COLORS["dark"])}
-    m = light[..., 3] == 255
-    cl = np.array([lut[tuple(p)] for p in light[m][::97, :3]])
-    cd = np.array([inv[tuple(p)] for p in dark[m][::97, :3]])
-    assert (cl == cd).all()                                            # same class in both themes
+def test_build_drops_stations_outside_conus(tmp_path):
+    st = _stations(10)
+    st.loc[0, ["lat", "lon"]] = [61.2, -149.9]          # Anchorage
+    assert build(st, tmp_path)["n_stations"] == 9
 
 
 # ============================================================ bad spreadsheet download

@@ -1,8 +1,7 @@
 numpy>=1.26
 pandas>=2.1
-scipy>=1.11
-pillow>=10.0
-pyproj>=3.6
 requests>=2.31
 openpyxl>=3.1
+# tests only (checks the ESRI:102009 definition used by the page against pyproj)
+pyproj>=3.6
 pytest>=8.0
