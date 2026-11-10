@@ -82,29 +82,31 @@ TILE_ATTRIBUTION = ("NOAA, Oceanic and Atmospheric Research (OAR), Climate Progr
 GRID_RES_M = 1000    # pixel size in metres (NOAA's finest service tiles are ~500 m/px)
 GRID_PAD_M = 20_000  # margin around CONUS
 
-# Cells below this chance are left transparent so the terrain / bathymetry map shows through.
-TRANSPARENT_BELOW_PCT = 5.0
+# Cells with this chance or less are left transparent so the terrain / bathymetry map shows through
+# (the map shows every chance greater than 1 %).
+TRANSPARENT_AT_OR_BELOW_PCT = 1.0
+M_TO_FT = 3.280839895
 
 # --- Base map: land elevation + bathymetry colour ramps -----------------------
 # A coarse raster over NOAA's whole view extent (US, Canada, Mexico, oceans, lakes) drawn under the
-# probability surface; it is what shows through where the chance is below TRANSPARENT_BELOW_PCT.
+# probability surface; it is what shows through where the chance is TRANSPARENT_AT_OR_BELOW_PCT or less.
 BASE_RES_M = 2000
 BASE_PAD_M = 400_000
 BASE_DEM_ZOOM = 6          # ~2 km/px at these latitudes; the 1 km DEM is only needed for the surface
 LAKES_URL = _NE + "ne_50m_lakes.geojson"
 LAKES_FILE = "ne_50m_lakes.geojson"
-# (elevation m, colour) for land; (depth m, colour) for ocean and lakes. Light and dark themes.
+# (elevation ft, colour) for land; (depth ft, colour) for ocean and lakes. Light and dark themes.
 LAND_RAMP = {
-    "light": [(0, "#a8c98f"), (150, "#c3dba0"), (400, "#e0e6a9"), (800, "#ecdfa2"), (1300, "#e2c690"),
-              (1900, "#cfa77a"), (2600, "#b58863"), (3400, "#9a7160"), (4400, "#d8cfca")],
-    "dark": [(0, "#33422d"), (150, "#3d4d33"), (400, "#4b5338"), (800, "#575238"), (1300, "#5a4d38"),
-             (1900, "#5c4b3c"), (2600, "#5a4a40"), (3400, "#574a47"), (4400, "#6a6260")],
+    "light": [(0, "#a8c98f"), (500, "#c3dba0"), (1300, "#e0e6a9"), (2600, "#ecdfa2"), (4300, "#e2c690"),
+              (6200, "#cfa77a"), (8500, "#b58863"), (11200, "#9a7160"), (14400, "#d8cfca")],
+    "dark": [(0, "#33422d"), (500, "#3d4d33"), (1300, "#4b5338"), (2600, "#575238"), (4300, "#5a4d38"),
+             (6200, "#5c4b3c"), (8500, "#5a4a40"), (11200, "#574a47"), (14400, "#6a6260")],
 }
 WATER_RAMP = {
-    "light": [(0, "#d7e9f1"), (100, "#c3dcea"), (500, "#a9c9de"), (1500, "#8bb0cb"), (3000, "#6f94b4"),
-              (5000, "#58799b"), (8000, "#46637f")],
-    "dark": [(0, "#26414f"), (100, "#223b49"), (500, "#1d3340"), (1500, "#182b37"), (3000, "#142330"),
-             (5000, "#101d28"), (8000, "#0c1620")],
+    "light": [(0, "#d7e9f1"), (300, "#c3dcea"), (1600, "#a9c9de"), (4900, "#8bb0cb"), (9800, "#6f94b4"),
+              (16400, "#58799b"), (26200, "#46637f")],
+    "dark": [(0, "#26414f"), (300, "#223b49"), (1600, "#1d3340"), (4900, "#182b37"), (9800, "#142330"),
+             (16400, "#101d28"), (26200, "#0c1620")],
 }
 
 # --- Estimation --------------------------------------------------------------

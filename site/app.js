@@ -75,7 +75,6 @@
   const classes = meta.classes;
   const classIndex = (p) => { let i = 0; while (i < classes.length - 1 && p > classes[i].hi) i++; return i; };  // upper edge inclusive
   const colorOf = (p) => classes[classIndex(p)].color;
-  const ft = (m) => Math.round(m * 3.28084);
 
   /* ---------- CRS: NOAA's tile grid ----------
    * Leaflet zoom 0 is an extra, coarser level (2x the service's level 0) so the whole of the
@@ -97,9 +96,10 @@
   L.control.attribution({ prefix: false }).addAttribution('NOAA NCEI 1991–2020 Normals · Climate.gov').addTo(map);
 
   let fitZoom = 0;
+  /* the opening view (and 'Wide map' re-fit) frames the contiguous U.S. itself, not NOAA's larger extent */
   function fitView() {
-    const [x0, y0, x1, y1] = meta.crs.extent, s = map.getSize();
-    const resNeeded = Math.max((x1 - x0) / (s.x - 20), (y1 - y0) / (s.y - 20));
+    const [x0, y0, x1, y1] = meta.conus_extent || meta.crs.extent, s = map.getSize();
+    const resNeeded = Math.max((x1 - x0) / (s.x - 24), (y1 - y0) / (s.y - 24));
     const z = fitZoom = Math.max(0, Math.floor(crs.zoom(1 / resNeeded) * 4) / 4);
     map.setView(unproj((x0 + x1) / 2, (y0 + y1) / 2), z, { animate: false });
   }
@@ -240,10 +240,10 @@
       ticks.append(el('span', null, i < classes.length - 1 ? String(c.hi) : ''));
     });
     legendEl.append(bar, ticks);
-    if (SURF.transparent_below) legendEl.append(el('div', 'ramp-note', 'Below ' + SURF.transparent_below + '%: no colour, terrain shows'));
+    if (SURF.transparent_at_or_below !== undefined) legendEl.append(el('div', 'ramp-note', SURF.transparent_at_or_below + '% or less: no colour, terrain shows'));
     if (BASE) {
       const r = BASE.ramps[theme];
-      legendEl.append(ramp('Land elevation', r.land, 'm', '+'), ramp('Ocean and lake depth', r.water, 'm', '+'));
+      legendEl.append(ramp('Land elevation', r.land, 'ft', '+'), ramp('Ocean and lake depth', r.water, 'ft', '+'));
     }
   }
   new Legend().addTo(map);
@@ -331,7 +331,7 @@
   const stationName = (s) => s.n + (s.s ? ', ' + s.s : '');
   const stationFacts = (s) => {
     const lines = [];
-    if (s.e !== null) lines.push(['Elevation: ', ft(s.e).toLocaleString('en-US') + ' ft (' + Math.round(s.e).toLocaleString('en-US') + ' m)', '']);
+    if (s.e !== null) lines.push(['Elevation: ', s.e.toLocaleString('en-US') + ' ft', '']);
     if (s.y) lines.push(['Years of record: ', String(s.y), '']);
     return lines;
   };

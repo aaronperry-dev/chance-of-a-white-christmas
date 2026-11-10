@@ -181,12 +181,13 @@ def test_overlay_uses_class_colours_and_coverage_alpha(tmp_path):
     assert tuple(px[0]) == (*c0, 255) and tuple(px[1]) == (255, 255, 255, 128) and px[2, 3] == 0
 
 
-def test_overlay_is_transparent_below_the_threshold(tmp_path):
-    vals = np.array([[0.0, 4.9, 5.0, 7.0, 95.0, np.nan]], np.float32)
-    R.render_overlay(G.classify(vals), np.ones((1, 6), np.float32), C.NOAA_COLORS, tmp_path / "o.png",
-                     values=vals, transparent_below=5.0)
+def test_overlay_is_transparent_at_or_below_the_threshold(tmp_path):
+    vals = np.array([[0.0, 0.9, 1.4, 1.6, 2.0, 95.0, np.nan]], np.float32)
+    R.render_overlay(G.classify(vals), np.ones((1, 7), np.float32), C.NOAA_COLORS, tmp_path / "o.png",
+                     values=vals, transparent_at_or_below=C.TRANSPARENT_AT_OR_BELOW_PCT)
     a = np.asarray(Image.open(tmp_path / "o.png"))[0, :, 3]
-    assert a.tolist() == [0, 0, 255, 255, 255, 0]               # 5.0 itself is kept; below it the base map shows
+    assert C.TRANSPARENT_AT_OR_BELOW_PCT == 1.0
+    assert a.tolist() == [0, 0, 0, 255, 255, 255, 0]            # the page reports whole percents: 1 % and below is clear, 2 % and up is drawn
 
 
 def test_two_darkest_classes_are_lighter_than_noaa_originals():
@@ -314,11 +315,30 @@ def test_colorize_uses_land_ramp_on_land_and_water_ramp_for_lakes_and_sea():
     lake = np.array([[False, True, False]])
     depth = np.array([[0.0, 100.0, 2000.0]], np.float32)
     rgb = BM.colorize(dem, land_cov, lake, depth, "light")[0]
-    assert tuple(rgb[0]) == tuple(BM.ramp(np.array([500.0]), C.LAND_RAMP["light"])[0])
-    assert tuple(rgb[1]) == tuple(BM.ramp(np.array([100.0]), C.WATER_RAMP["light"])[0])      # lake inside land = water
-    assert tuple(rgb[2]) == tuple(BM.ramp(np.array([2000.0]), C.WATER_RAMP["light"])[0])
+    ft = C.M_TO_FT                                                   # inputs are metres, the ramps are in feet
+    assert tuple(rgb[0]) == tuple(BM.ramp(np.array([500.0 * ft]), C.LAND_RAMP["light"])[0])
+    assert tuple(rgb[1]) == tuple(BM.ramp(np.array([100.0 * ft]), C.WATER_RAMP["light"])[0])      # lake inside land = water
+    assert tuple(rgb[2]) == tuple(BM.ramp(np.array([2000.0 * ft]), C.WATER_RAMP["light"])[0])
     half = BM.colorize(dem[:, :1], np.array([[0.5]], np.float32), np.array([[False]]), depth[:, :1], "light")[0, 0]
     assert half.min() > 0 and not (tuple(half) == tuple(rgb[0]))                                # coast pixel is a blend
+
+
+def test_all_displayed_elevations_are_imperial(tmp_path):
+    assert max(x for x, _ in C.LAND_RAMP["light"]) == 14400 and max(x for x, _ in C.WATER_RAMP["light"]) > 20000   # feet, not metres
+    st = _stations(20)
+    st["elev_m"] = 1000.0
+    build(st, box_polys(), tmp_path, res=20_000, use_terrain=False)
+    assert json.loads((tmp_path / "stations.json").read_text())[0]["e"] == 3281
+    head = (tmp_path / "stations.csv").read_text().splitlines()
+    assert "elevation_ft" in head[0] and "elevation_m" not in head[0] and head[1].split(",")[5] == "3281"
+
+
+def test_meta_has_conus_extent_for_the_opening_view(tmp_path):
+    meta = build(_stations(), box_polys(), tmp_path, res=20_000, use_terrain=False)
+    x0, y0, x1, y1 = meta["conus_extent"]
+    assert x0 < x1 and y0 < y1
+    assert all(g0 <= e0 and e1 <= g1 for g0, e0, e1, g1 in
+               [(meta["grid"]["x0"], x0, x1, meta["grid"]["x1"]), (meta["grid"]["y0"], y0, y1, meta["grid"]["y1"])])
 
 
 def test_land_and_water_ramps_do_not_share_hues_at_the_shore():
@@ -340,12 +360,12 @@ def test_build_with_base_map_writes_images_and_meta(tmp_path):
     b = meta["base"]
     for f in (b["light"], b["dark"], b["relief"]):
         assert Image.open(tmp_path / f).size == (bgrid.nx, bgrid.ny), f
-    assert b["grid"]["res"] == 50_000 and set(b["ramps"]) == {"light", "dark"} and meta["surface"]["transparent_below"] == 5.0
+    assert b["grid"]["res"] == 50_000 and set(b["ramps"]) == {"light", "dark"} and meta["surface"]["transparent_at_or_below"] == 1.0
     ov = np.asarray(Image.open(tmp_path / "overlay.png"))
     vals = np.frombuffer(gzip.decompress((tmp_path / "values.bin.gz").read_bytes()), np.uint8).reshape(grid.ny, grid.nx)
-    low = (vals < 5)
-    assert low.any() and (ov[..., 3][low] == 0).all()                           # nothing painted where the chance is < 5 %
-    assert (ov[..., 3][(vals >= 5) & (vals < 255)] > 0).mean() > 0.95
+    low = (vals <= 1)
+    assert low.any() and (ov[..., 3][low] == 0).all()                           # nothing painted where the chance is 1 % or less
+    assert (ov[..., 3][(vals > 1) & (vals < 255)] > 0).mean() > 0.95
 
 
 def test_build_without_base_removes_stale_base_files(tmp_path):

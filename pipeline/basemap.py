@@ -1,7 +1,7 @@
 """Base map under the probability surface: a hypsometric (land) and bathymetric (ocean, lakes) colour map.
 
 Drawn at BASE_RES_M over NOAA's whole view extent, once per colour theme. Where the chance of a white
-Christmas is below TRANSPARENT_BELOW_PCT the surface is transparent and this is what shows. A second
+Christmas is TRANSPARENT_AT_OR_BELOW_PCT or less the surface is transparent and this is what shows. A second
 image shades terrain outside the US (inside the US the 1 km relief layer does that).
 """
 from __future__ import annotations
@@ -67,10 +67,10 @@ def water_depth(dem: np.ndarray, land_cov: np.ndarray, lake_labels: np.ndarray) 
 
 
 def colorize(dem: np.ndarray, land_cov: np.ndarray, lake: np.ndarray, depth: np.ndarray, theme: str) -> np.ndarray:
-    """(ny, nx, 3) uint8 base map for one theme."""
+    """(ny, nx, 3) uint8 base map for one theme. ``dem`` and ``depth`` are in metres; the ramps are in feet."""
     h, w = dem.shape
-    land = ramp(np.maximum(dem, 0.0).ravel(), C.LAND_RAMP[theme]).reshape(h, w, 3).astype(np.float32)
-    wat = ramp(depth.ravel(), C.WATER_RAMP[theme]).reshape(h, w, 3).astype(np.float32)
+    land = ramp(np.maximum(dem, 0.0).ravel() * C.M_TO_FT, C.LAND_RAMP[theme]).reshape(h, w, 3).astype(np.float32)
+    wat = ramp(depth.ravel() * C.M_TO_FT, C.WATER_RAMP[theme]).reshape(h, w, 3).astype(np.float32)
     a = (np.clip(land_cov, 0, 1) * (~lake))[..., None]          # lakes are water even inside a country
     return np.round(a * land + (1 - a) * wat).astype(np.uint8)
 

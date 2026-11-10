@@ -117,7 +117,7 @@ def build(stations: pd.DataFrame, polygons, out_dir: Path, *, res: float = C.GRI
 
     cls = classify(values)
     render_overlay(cls, coverage, C.NOAA_COLORS, out_dir / "overlay.png", values=values,
-                   transparent_below=C.TRANSPARENT_BELOW_PCT)
+                   transparent_at_or_below=C.TRANSPARENT_AT_OR_BELOW_PCT)
     write_value_grid(values, coverage, out_dir / "values.bin.gz")
     has_relief = dem is not None
     if has_relief:
@@ -135,16 +135,16 @@ def build(stations: pd.DataFrame, polygons, out_dir: Path, *, res: float = C.GRI
             (out_dir / f).unlink(missing_ok=True)
 
     recs = [{"id": r.id, "n": r.name, "s": r.state, "la": round(r.lat, 4), "lo": round(r.lon, 4),
-             "e": None if pd.isna(r.elev_m) else round(float(r.elev_m)), "p": int(round(r.prob)),
+             "e": None if pd.isna(r.elev_m) else round(float(r.elev_m) * C.M_TO_FT), "p": int(round(r.prob)),
              "y": None if pd.isna(getattr(r, "years", np.nan)) else int(r.years)}
             for r in st.itertuples()]
     (out_dir / "stations.json").write_text(json.dumps(recs, separators=(",", ":")))
     with open(out_dir / "stations.csv", "w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
-        w.writerow(["id", "name", "state", "lat", "lon", "elevation_m", "prob_snow_depth_ge_1in_pct", "years"])
+        w.writerow(["id", "name", "state", "lat", "lon", "elevation_ft", "prob_snow_depth_ge_1in_pct", "years"])
         for r in st.itertuples():
             w.writerow([r.id, r.name, r.state, r.lat, r.lon,
-                        "" if pd.isna(r.elev_m) else round(float(r.elev_m), 1),
+                        "" if pd.isna(r.elev_m) else round(float(r.elev_m) * C.M_TO_FT),
                         r.prob, "" if pd.isna(getattr(r, "years", np.nan)) else int(r.years)])
 
     labels = C.class_labels()
@@ -157,9 +157,10 @@ def build(stations: pd.DataFrame, polygons, out_dir: Path, *, res: float = C.GRI
         "source": source or {},
         "crs": {"name": C.LCC_NAME, "proj4": C.LCC_PROJ, "extent": list(C.NOAA_EXTENT)},
         "grid": grid.as_meta(),
+        "conus_extent": [round(v, 1) for v in polygon_extent(projected)],
         "surface": {"overlay": "overlay.png", "relief": "relief.webp" if has_relief else None,
                     "values": "values.bin.gz", "nodata": 255, "method": method,
-                    "transparent_below": C.TRANSPARENT_BELOW_PCT,
+                    "transparent_at_or_below": C.TRANSPARENT_AT_OR_BELOW_PCT,
                     "dem": dem_label if has_relief else "", "cv": cv},
         "base": base_meta,
         "tiles": {
