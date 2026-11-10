@@ -74,15 +74,16 @@
 
     <section class="card" aria-labelledby="h-area">
       <h2 id="h-area">Stations by chance</h2>
+      <p id="view-count" class="view-count" aria-live="polite"></p>
       <ul id="classes" class="classes"></ul>
       <details class="tableview">
         <summary>Table view</summary>
         <table id="class-table">
-          <thead><tr><th scope="col">Chance</th><th scope="col">Share of stations</th></tr></thead>
+          <thead><tr><th scope="col">Chance</th><th scope="col">Stations</th><th scope="col">Share</th></tr></thead>
           <tbody></tbody>
         </table>
       </details>
-      <p class="note">Share of the weather stations in each class — not land area.</p>
+      <p class="note">Counts the weather stations inside the current map view, whether or not their dots are shown — not land area. Pan or zoom to update.</p>
     </section>
   </aside>
 </main>

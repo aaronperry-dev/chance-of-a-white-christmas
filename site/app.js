@@ -58,6 +58,8 @@
   const crs = new L.Proj.CRS(meta.crs.name, meta.crs.proj4, { resolutions, origin: T.origin });
   const proj = (ll) => crs.projection.project(ll);
   const unproj = (x, y) => crs.projection.unproject(L.point(x, y));
+  const stationXY = stations.map((s) => proj(L.latLng(s.la, s.lo)));     // LCC metres, computed once
+  const stationCls = stations.map((s) => classIndex(s.p));
 
   const map = L.map('map', {
     crs, zoomSnap: 0.25, zoomDelta: 0.5, wheelPxPerZoomLevel: 90,
@@ -73,11 +75,14 @@
   }
   fitView();
 
-  /* keep panning inside NOAA's constraint extent (LCC metres) */
+  /* keep panning inside NOAA's constraint extent (LCC metres). Only correct overshoots of more than
+   * one screen pixel: panTo() with a sub-pixel offset fires 'moveend' again straight away, which
+   * would re-enter this handler forever. */
   map.on('moveend', () => {
     const c = proj(map.getCenter()), [x0, y0, x1, y1] = meta.crs.extent;
     const cx = Math.min(Math.max(c.x, x0), x1), cy = Math.min(Math.max(c.y, y0), y1);
-    if (cx !== c.x || cy !== c.y) map.panTo(unproj(cx, cy));
+    const tol = 1 / crs.scale(map.getZoom());                       // metres per pixel at this zoom
+    if (Math.abs(cx - c.x) > tol || Math.abs(cy - c.y) > tol) map.panTo(unproj(cx, cy));
   });
 
   /* ---------- panes ---------- */
@@ -139,6 +144,7 @@
     stationLayer.addLayer(m);
     return m;
   });
+  let stationsOn = false;
   const dotRadius = () => { const z = map.getZoom(); return z < 1.25 ? 1.8 : z < 2.25 ? 2.8 : z < 3.25 ? 3.8 : 5; };
   const sizeDots = () => { const r = dotRadius(); stationMarkers.forEach((m) => m.setRadius(r)); };
   map.on('zoomend', sizeDots); sizeDots();
@@ -161,21 +167,42 @@
   }
   new Legend().addTo(map);
 
-  const shares = meta.stats.share_by_class, maxShare = Math.max(...shares, 1e-9);
+  /* ---------- stations by chance, for the part of the map that is in view ----------
+   * The map's projected axes are screen-aligned, so the visible area is exactly the rectangle
+   * spanned by the container's two opposite corners in LCC metres. */
+  let view = { n: 0, counts: classes.map(() => 0) };
+  function updateView() {
+    const sz = map.getSize();
+    const a = proj(map.containerPointToLatLng([0, 0])), b = proj(map.containerPointToLatLng([sz.x, sz.y]));
+    const x0 = Math.min(a.x, b.x), x1 = Math.max(a.x, b.x), y0 = Math.min(a.y, b.y), y1 = Math.max(a.y, b.y);
+    const counts = classes.map(() => 0);
+    let n = 0;
+    for (let i = 0; i < stationXY.length; i++) {
+      const p = stationXY[i];
+      if (p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1) { counts[stationCls[i]]++; n++; }
+    }
+    view = { n, counts };
+    renderClasses();
+  }
   function renderClasses() {
-    const ul = $('#classes'), tb = $('#class-table tbody');
+    const ul = $('#classes'), tb = $('#class-table tbody'), { n, counts } = view;
     ul.replaceChildren(); tb.replaceChildren();
+    const total = stations.length, share = (i) => (n ? counts[i] / n : 0), maxShare = Math.max(...counts.map((_, i) => share(i)), 1e-9);
+    $('#view-count').textContent = n === 0 ? 'No stations in the current map view.'
+      : n === total ? 'All ' + total.toLocaleString('en-US') + ' stations are in view.'
+      : n.toLocaleString('en-US') + ' of ' + total.toLocaleString('en-US') + ' stations are in view.';
     classes.forEach((c, i) => {
       const li = el('li'), sw = el('span', 'sw'), track = el('span', 'track'), bar = el('i');
       sw.style.background = c.color;
-      bar.style.width = (100 * shares[i] / maxShare).toFixed(1) + '%';
+      bar.style.width = (100 * share(i) / maxShare).toFixed(1) + '%';
       bar.style.background = c.color;
       track.append(bar);
-      li.append(sw, el('span', 'rng-l', c.label), track, el('span', 'val', pct(shares[i], 1)));
+      li.append(sw, el('span', 'rng-l', c.label), track, el('span', 'val', n ? pct(share(i), 1) : '–'));
       ul.append(li);
-      const tr = el('tr'); tr.append(el('td', null, c.label), el('td', null, pct(shares[i], 1))); tb.append(tr);
+      const tr = el('tr'); tr.append(el('td', null, c.label), el('td', null, counts[i].toLocaleString('en-US')), el('td', null, n ? pct(share(i), 1) : '–')); tb.append(tr);
     });
   }
+  map.on('moveend resize', updateView);
 
   /* ---------- nearest station ---------- */
   function nearestStation(lat, lon) {
@@ -252,10 +279,35 @@
     if (!saved) { theme = e.matches ? 'light' : 'dark'; paint(); }
   });
   paint();
+  updateView();
+
+  /* ---------- station dots: one switch, on the map and in the toolbar ---------- */
+  const stationsBox = $('#t-stations');
+  let stationsBtn = null;
+  function setStations(on) {
+    stationsOn = on;
+    on ? stationLayer.addTo(map) : stationLayer.remove();
+    stationsBox.checked = on;
+    if (stationsBtn) {
+      stationsBtn.setAttribute('aria-pressed', String(on));
+      stationsBtn.textContent = 'Stations: ' + (on ? 'On' : 'Off');
+    }
+  }
+  const StationsToggle = L.Control.extend({
+    options: { position: 'topright' },
+    onAdd() {
+      stationsBtn = el('button', 'map-toggle'); stationsBtn.type = 'button';
+      L.DomEvent.disableClickPropagation(stationsBtn);
+      stationsBtn.addEventListener('click', () => setStations(!stationsOn));
+      return stationsBtn;
+    },
+  });
+  new StationsToggle().addTo(map);
+  setStations(false);
+  stationsBox.addEventListener('change', (e) => setStations(e.target.checked));
 
   /* ---------- toolbar ---------- */
   const toggle = (id, layer) => $(id).addEventListener('change', (e) => { e.target.checked ? layer.addTo(map) : layer.remove(); });
-  toggle('#t-stations', stationLayer);
   if (lineLayer) toggle('#t-lines', lineLayer);
   $('#t-labels').addEventListener('change', (e) => {
     labelsOn = e.target.checked;
@@ -296,5 +348,5 @@
   });
   input.addEventListener('blur', () => setTimeout(closeList, 120));
 
-  window.__wc = { map, crs, meta, noaa, proj, unproj };   // handy for debugging / tests
+  window.__wc = { map, crs, meta, noaa, proj, unproj, stationLayer, stations, classIndex, view: () => view };   // handy for debugging / tests
 })();

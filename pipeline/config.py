@@ -68,11 +68,11 @@ TILE_ATTRIBUTION = ("NOAA, Oceanic and Atmospheric Research (OAR), Climate Progr
 
 # --- Legend (NOAA's 8 classes) -------------------------------------------------
 # Labels and breaks follow NOAA's maps: 0-10, 11-25, 26-40, 41-50, 51-60, 61-75, 76-90, 91-100 %.
-# Swatch colours were sampled from NOAA's published 1991-2020 figure
-# (WhiteChristmas_1991-2020normals_2480px_nostatelabels). The map itself is NOAA's tiles, so
-# if the swatches ever look different from the tiles, edit this list.
+# Swatch colours were sampled from NOAA's interactive-map legend and checked against the colours
+# of the rendered tiles (a screenshot of the live page). The hillshade darkens/lightens tiles a bit,
+# so tile pixels are close to, not identical to, these values. If they ever differ, edit this list.
 CLASS_UPPER_EDGES = [10, 25, 40, 50, 60, 75, 90]          # a class includes its upper edge
-NOAA_COLORS = ["#5f5f5f", "#636f85", "#5575a8", "#5b8dc8", "#72a2d0", "#95b6d7", "#bbc9d6", "#ebebeb"]
+NOAA_COLORS = ["#3b3b3b", "#304469", "#1e50a9", "#1d71d4", "#4799e5", "#80b7ed", "#d0e5f8", "#ffffff"]
 assert len(CLASS_UPPER_EDGES) + 1 == len(NOAA_COLORS)
 
 
